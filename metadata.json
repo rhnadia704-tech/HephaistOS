@@ -1,0 +1,6 @@
+{
+  "name": "HephaistOS",
+  "description": "Launcher et environnement système modulaire Material 3 avec rail animé, détection d'applications compatibles, terminal et gestionnaire de paramètres.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

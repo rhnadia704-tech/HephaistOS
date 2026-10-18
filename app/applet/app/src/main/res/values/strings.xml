@@ -1,0 +1,11 @@
+<resources>
+    <string name="app_name">HephaistOS</string>
+    <string name="tagline">Environnement Système &amp; Lanceur Modulaire</string>
+    <string name="nav_home">Accueil</string>
+    <string name="nav_settings">Paramètres</string>
+    <string name="nav_terminal">Terminal</string>
+    <string name="nav_add_module">Ajouter un module</string>
+    <string name="category_theme">Thème &amp; Apparence</string>
+    <string name="category_permissions">Autorisations Système</string>
+    <string name="category_documentation">Documentation &amp; Changelog</string>
+</resources>
