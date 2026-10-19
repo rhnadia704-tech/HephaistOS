@@ -22,10 +22,8 @@ jobs:
           java-version: '21'
           distribution: 'temurin'
 
-      - name: Setup Gradle 9
+      - name: Setup Gradle Wrapper & Cache
         uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '9.0'
 
       - name: Ensure Debug Keystore
         run: |
@@ -45,8 +43,11 @@ jobs:
             cat .env.example >> .env
           fi
 
+      - name: Make Gradle Wrapper executable
+        run: chmod +x gradlew
+
       - name: Compile Debug APK
-        run: gradle :app:assembleDebug --stacktrace
+        run: ./gradlew :app:assembleDebug --stacktrace
 
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
