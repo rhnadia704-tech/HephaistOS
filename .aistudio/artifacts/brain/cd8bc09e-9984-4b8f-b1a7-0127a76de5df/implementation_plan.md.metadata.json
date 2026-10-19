@@ -1,6 +1,6 @@
 {
-  "summary": "Plan d'implémentation pour le filtrage strict des satellites HephaistOS selon leur ADN officiel, l'enrichissement des directives et templates dans les paramètres, et l'extraction réelle intégrale des fichiers de partition dans le moteur Unpack.",
-  "updatedAt": "2026-10-19T08:23:41.299622809Z",
+  "summary": "Plan d'implémentation pour le moteur Unpack et Repack inspiré du dépôt officiel UKA (blackeangel/UKA) avec prise en charge intelligente avec ou sans root, contournement de la limite de 64 octets losetup, extraction totale de tous les fichiers et gestion avancée des symlinks et permissions.",
+  "updatedAt": "2026-10-19T11:42:16.268730304Z",
   "requestFeedback": true,
   "userFacing": true
 }

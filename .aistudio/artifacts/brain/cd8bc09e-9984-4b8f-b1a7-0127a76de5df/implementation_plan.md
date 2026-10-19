@@ -1,88 +1,93 @@
-# Filtrage Strict Satellites HephaistOS & Extraction Réelle Unpack
+# Moteur UKA Unpack & Repack Haute Fidélité (Inspiré de blackeangel/UKA)
 
-Plan d'implémentation pour éliminer les applications génériques du téléphone de l'accueil en n'affichant que les satellites dotés de l'ADN HephaistOS, enrichir les directives et modèles de développement dans les Paramètres, et refondre le moteur Unpack pour procéder à une extraction réelle et complète des fichiers d'images ROM.
+Plan d'implémentation pour refondre le moteur de désassemblage et réassemblage d'images Android HephaistOS selon l'architecture du projet de référence `blackeangel/UKA`, avec exécution intelligente multi-niveaux (avec ou sans root), contournement de la limite de 64 octets du noyau (`losetup`), extraction totale et fidèle de tous les fichiers et sous-dossiers, et préservation intégrale des liens symboliques et contextes SELinux.
 
 ## Examen Utilisateur & Décisions Critiques
 
 > [!IMPORTANT]
-> Décisions confirmées suite à vos réponses aux questions de cadrage :
-> 1. **Filtrage Strict de l'Accueil :** Aucune application généraliste du téléphone (Gmail, Téléphone, Drive, etc.) ne sera affichée sur l'accueil. Seules les applications déclarant explicitement le protocole Satellite HephaistOS (`org.hephaistos.action.ADDON` ou métadonnées `org.hephaistos.addon.*`) apparaîtront.
-> 2. **Enrichissement des Directives et Templates :** La section Paramètres > Modèles / Satellites sera considérablement renforcée avec des spécifications architecturales complètes, des exemples de code Kotlin/Manifest prêts à l'emploi et des règles précises pour concevoir des satellites conformes.
-> 3. **Moteur Unpack Réel :** Remplacement de la génération de structures factices par une extraction réelle intégrale des fichiers (décompression sparse via `simg2img`, extraction des archives, copie et désassemblage réel des fichiers de partitions dans `/storage/emulated/0/HEPHAISTOS/UNPACKED/<nom_cible>/`).
+> Suite à vos réponses et à l'analyse de votre capture d'écran d'erreur terminal (`losetup: > 64 bytes ; mount: losetup failed`) :
+> 1. **Cause racine de l'échec de montage :** Le noyau Linux et la commande `losetup` (toybox/busybox Android) imposent une limite stricte de 64 octets (`LO_NAME_SIZE = 64`) sur le chemin du fichier image. Le chemin complet de votre ROM (`/storage/emulated/0/MT2/Axion-2.8-GSI_treble_arm64-ab-VANILLA-20260719.img`) mesure 73 caractères, ce qui provoquait l'échec immédiat de `losetup` et laissait les dossiers créés vides.
+> 2. **Résolution inspirée de blackeangel/UKA :** 
+>    - Création d'un alias de chemin ultra-court dans `/data/local/tmp/img.raw` (< 25 caractères) ou résolution directe vers `/data/media/0/...`.
+>    - Attribution dynamique d'un périphérique loop libre via `losetup -f`.
+>    - Montage loop en lecture seule sur un point temporaire, puis copie intégrale par `tar`/`cp -a` vers le dossier cible pour ne rien omettre (fichiers, symlinks, permissions, UID/GID).
+> 3. **Mode Sans Root & Fallbacks Universels :**
+>    - Si le terminal n'est pas rooté ou si le noyau restreint les loop devices, déclenchement automatique d'extracteurs d'images user-space (détection de binaires `7z`, décompression sparse native, extraction complète des archives ZIP et Payload).
+>    - Aucun dossier vide simulé ne sera généré : si une étape rencontre une anomalie, elle est explicitement signalée et relayée avec une solution alternative sans tronquer les données.
 
 ---
 
 ## 1. Vue d'Ensemble & Concept Clé
 
-* **Filtrage par ADN HephaistOS :** HephaistOS agit comme un environnement d'accueil et un système hôte modulaire. Son accueil doit uniquement refléter son écosystème propriétaire : les modules satellites déclarés et connectés via l'action d'intention standardisée `org.hephaistos.action.ADDON`. Si aucun satellite n'est installé sur l'appareil, l'accueil reste net, centré uniquement sur le module **Unpack Repack**.
-* **Directives & Spécifications Renforcées :** Fournir dans l'onglet Paramètres une documentation exhaustive et téléchargeable expliquant aux développeurs comment donner « l'ADN HephaistOS » à leur APK satellite (filtres d'intent, permissions partagées, bridge d'interaction hôte/satellite, descripteurs de capacités).
-* **Extraction Réelle UKA Unpack :** Lorsqu'une image réelle est sélectionnée (ex: `Infinity312.img` de 3.35 Go ou images GSI/EXT4/EROFS/ZIP), le moteur UKA doit extraire l'intégralité du contenu réel (fichiers système, configurations, propriétés, binaires) soit directement via les utilitaires de système de fichiers / commandes privilégiées root si disponibles, soit via un désassemblage bloc par bloc fidèle, sans jamais substituer le contenu par des dossiers vides.
+* **Extraction Réelle et Complète :** Remplacer le système précédent par un pipeline robuste calqué sur les scripts éprouvés de UKA (`blackeangel/UKA`). Les images EXT4, EROFS, F2FS, Super et ZIP sont désassemblées dans leur intégralité. Tous les répertoires (`app`, `priv-app`, `framework`, `etc`, `bin`, `lib64`, `media`, `overlay`, `fonts`) contiennent désormais leurs vrais fichiers décompressés.
+* **Gestion Avancée des Symlinks & Métadonnées :** Lors de l'extraction, tous les liens symboliques et permissions SELinux sont enregistrés dans `symlinks.txt` et `fs_config` conformément au standard UKA, garantissant un repack bit-à-bit parfait ultérieur.
+* **Exécution Hybride Robuste (Root / Sans Root) :** HephaistOS détecte l'état des privilèges et bascule automatiquement sur la stratégie optimale (Loop Mount Privilégié avec bypass de longueur de chemin, ou extracteur de flux utilisateur).
 
 ---
 
 ## 2. Expérience Utilisateur & Design Visuel
 
 ### Flux Utilisateur
-1. **Accueil HephaistOS :**
-   - Présentation de la carte principale épurée **Unpack Repack** en tête.
-   - En dessous : affichage exclusif des applications possédant le protocole HephaistOS (`Satellite HephaistOS`). Les 101 applications système ou tierces non-satellites du téléphone sont exclues.
-   - Si aucun satellite n'est présent : l'accueil est épuré, sans liste encombrante d'applications non désirées.
-2. **Paramètres > Modèles de Satellites :**
-   - Directives claires et interactives détaillant « L'ADN Obligatoire d'un Satellite HephaistOS ».
-   - Code prêt à copier pour `AndroidManifest.xml`, `BroadcastReceiver` et classes clientes Kotlin.
-   - Téléchargement du guide enrichi PDF et du Starter Kit ZIP complet.
-3. **Module Unpack :**
-   - Sélection du fichier cible dans `/sdcard/HEPHAISTOS/TARGET/` ou via le sélecteur.
-   - Déroulement de l'analyse et extraction réelle avec suivi pas à pas en console Terminal.
-   - Les fichiers réels de l'image sont créés et inspectables dans `/sdcard/HEPHAISTOS/UNPACKED/<nom_cible>/`.
+1. **Sélection de l'Image Cible :**
+   - L'utilisateur sélectionne un fichier d'image (ex : partition GSI de 3,35 Go, Recovery ZIP, Payload).
+   - L'écran Unpack affiche les détails détectés : Type, Système de fichiers (EXT4/EROFS/Sparse), taille réelle et somme de contrôle.
+2. **Lancement de l'Unpack Total :**
+   - L'utilisateur clique sur « Démarrer l'Unpack ».
+   - Le Terminal affiche en temps réel les étapes techniques :
+     - Résolution du chemin court pour contourner la limite de 64 octets de `losetup`.
+     - Liaison du périphérique loop (`/dev/block/loopX`).
+     - Montage du système de fichiers et extraction récursive de l'ensemble des fichiers.
+     - Sauvegarde des symlinks et de la cartographie `_meta.json`.
+3. **Exploration des Fichiers Décompressés :**
+   - À l'issue de l'unpack, l'utilisateur ouvre ZArchiver, MT Manager ou le gestionnaire de fichiers dans `/sdcard/HEPHAISTOS/UNPACKED/<cible>/` : tous les dossiers contiennent leurs véritables fichiers d'origine (APKs, bibliothèques `.so`, configurations `.xml`, binaires exécutables).
 
 ---
 
 ## 3. Décisions Clés de Conception & Arbitrages
 
-* **Arbitrage Filtrage Applicatif :**
-  - *Choix retenu :* Détection exclusive par `queryIntentActivities` sur `org.hephaistos.action.ADDON` et vérification des métadonnées de manifeste. Suppression définitive du scan large de tous les launchers non-système (`FLAG_SYSTEM == 0`).
-  - *Pourquoi :* L'utilisateur souhaite un OS modulaire dédié et non un lanceur d'applications génériques Android.
-* **Arbitrage Extraction Réelle Unpack :**
-  - *Choix retenu :* Double pipeline d'extraction :
-    1. Si l'accès root est disponible : exécution des binaires d'extraction (`simg2img`, montage loop en lecture temporaire pour copier l'arborescence réelle des fichiers, ou extraction par utilitaire archive).
-    2. En mode standard / non-root : extraction directe des archives ZIP/Payload et décodage réel des blocs d'images plutôt que la création de stubs factices.
-  - *Pourquoi :* Les images de plusieurs gigaoctets contenaient des données réelles qui n'étaient pas extraites dans le dossier de travail.
+* **Contournement de la Limite 64 octets de `losetup` :**
+  - *Choix retenu :* Avant d'invoquer `losetup` ou `mount`, créer un lien symbolique court : `ln -sf "<chemin_complet>" /data/local/tmp/uka_in.raw`.
+  - *Pourquoi :* `/data/local/tmp/uka_in.raw` fait 25 octets, contournant systématiquement l'erreur `> 64 bytes` observée sur les noyaux Android récents.
+* **Mécanisme de Copie Totale :**
+  - *Choix retenu :* Utilisation de `tar -cf - -C /data/local/tmp/hephaistos_mnt . | tar -xf - -C "$DEST_DIR"` ou `cp -a -r`.
+  - *Pourquoi :* Préserve rigoureusement les permissions POSIX, les horodatages, les nœuds spéciaux et tous les liens symboliques (symlinks).
+* **Extraction Sans Root :**
+  - *Choix retenu :* Pour les environnements non-rootés, détection des utilitaires de décompression installés sur l'appareil (ex: `7z` qui extrait nativement les images de disque EXT4/ISO/FAT, ou extraction de flux ZIP/payload) couplée à une détection claire des capacités de l'appareil.
 
 ---
 
-## 4. Architecture Technique & Flux de Données
+## 4. Architecture Technique & Pipeline d'Extraction UKA
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                       HEPHAISTOS HÔTE                       │
+│                    HEPHAISTOS UKA PIPELINE                  │
 ├─────────────────────────────────────────────────────────────┤
-│  [Accueil]                                                  │
-│   ├── UnpackRepackQuickCard (Carte maîtresse)               │
-│   └── SatellitesDétectés (Filtre strict: ACTION_ADDON)      │
+│  [Étape 1 : Analyse & Normalisation Chemin]                 │
+│   ├── Vérification Root (RootChecker / su)                  │
+│   └── Création lien court : /data/local/tmp/uka_in.raw     │
 │                                                             │
-│  [Paramètres - Templates & ADN]                             │
-│   ├── Spécifications AndroidManifest (Filtres, Métadonnées) │
-│   ├── Contrats d'interfaces Kotlin (Broadcast / IPC)        │
-│   └── Kit d'Intégration PDF / Zip téléchargeable            │
+│  [Étape 2 : Montage & Déballage (Mode Root)]                │
+│   ├── losetup -f -> /dev/block/loopX                        │
+│   ├── losetup -r /dev/block/loopX /data/local/tmp/uka_in.raw│
+│   ├── mount -t ext4|erofs -o ro loopX /data/local/tmp/mnt   │
+│   └── Transfert intégral vers /UNPACKED/<target>/           │
 │                                                             │
-│  [Moteur UKA Unpack Réel]                                   │
-│   ├── Analyse Cible (Magic, Sparse, Super, EXT4, EROFS, Zip)│
-│   ├── Désassemblage Réel (simg2img / loop / stream extract) │
-│   └── Écriture Arborescence Réelle dans /UNPACKED/<target>/ │
+│  [Étape 3 : Mode Sans Root / Fallback Utilisateur]          │
+│   ├── Archives ZIP -> Décompression intégrale ZipFile       │
+│   ├── Sparse Images -> simg2img unsparse                    │
+│   └── Images RAW -> Décompression 7z / flux sans simulation │
+│                                                             │
+│  [Étape 4 : Métadonnées & Repack Fidèle]                    │
+│   ├── Capture symlinks.txt & fs_config                      │
+│   └── Sauvegarde JSON dans HEPHAISTOS/Data/unpack/          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ### Plan d'Exécution Fichier par Fichier
-1. **`app/src/main/java/com/example/data/AddonRegistry.kt` :**
-   - Restreindre `scanInstalledAddons` strictement aux applications répondant à `ACTION_HEPHAISTOS_ADDON`.
-   - Supprimer le scan 2 qui ajoutait toutes les applications du lanceur Android du téléphone.
-2. **`app/src/main/java/com/example/ui/screens/HomeScreen.kt` :**
-   - Mettre à jour l'intitulé de la section : « Satellites HephaistOS connectés ».
-   - N'afficher la section que si des satellites possédant l'ADN HephaistOS sont installés.
-3. **`app/src/main/java/com/example/data/UkaEngine.kt` :**
-   - Remplacer `createSimulatedPartitionContent` par un moteur d'extraction réelle des fichiers pour les images de ROM réelles.
-   - Pour les archives ZIP et Payload : extraire les vrais fichiers et partitions.
-   - Pour les images EXT4/EROFS : prise en charge de l'extraction réelle des structures de répertoires et fichiers via commandes privilégiées root ou extraction séquentielle de données, afin que le dossier décompressé contienne les vrais fichiers de la ROM.
-4. **`app/src/main/java/com/example/ui/screens/SettingsScreen.kt` & `PdfExporterService.kt` :**
-   - Mettre à jour et enrichir la documentation de « L'ADN Satellite HephaistOS » dans les modèles de paramètres pour détailler les impératifs d'enregistrement des APK satellites.
+1. **`app/src/main/java/com/example/data/UkaEngine.kt` :**
+   - Implémenter la méthode `mountAndExtractLoopWithShortPath` avec création du lien symbolique court dans `/data/local/tmp/` et commande `losetup -f`.
+   - Remplacer le système précédent de dossiers vides par une copie intégrale par flux ou commande d'archive.
+   - Ajouter le support du déballage complet sans root (archives ZIP et flux de partitions).
+   - Mettre à jour `executeRepack` pour reconstruire l'image à partir des données réelles du dossier décompressé.
+2. **`app/src/main/java/com/example/ui/HephaistViewModel.kt` :**
+   - Transmettre les logs détaillés de chaque phase (loop setup, montage, copie récursive des éléments) directement dans la console Terminal.

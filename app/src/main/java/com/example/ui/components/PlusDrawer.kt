@@ -59,9 +59,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.widget.Toast
+import com.example.data.WorkspaceManager
+import java.io.File
 
 @Composable
 fun PlusDrawer(
@@ -75,6 +84,8 @@ fun PlusDrawer(
     if (!isOpen) return
 
     var selectedTabIndex by remember { mutableIntStateOf(0) }
+    val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
 
     // Script form state
     var scriptName by remember { mutableStateOf("analyse_partition") }
@@ -378,7 +389,24 @@ fun PlusDrawer(
                                 }
                             }
                         } else {
-                            // TAB 2: ADDON DÉTECTION & DÉMO
+                            // TAB 2: TEMPLATE SATELLITE HEPHAISTOS & ADN
+                            val manifestTemplate = """
+<activity
+    android:name=".MainActivity"
+    android:exported="true">
+    <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+        <!-- ADN HephaistOS : Marqueur Satellite officiel -->
+        <action android:name="org.hephaistos.action.ADDON" />
+    </intent-filter>
+    <!-- Capacités exposées au Cerveau HephaistOS -->
+    <meta-data
+        android:name="org.hephaistos.addon.CAPABILITIES"
+        android:value="kitchen.unpack,kitchen.repack,tool.flash" />
+</activity>
+                            """.trimIndent()
+
                             item {
                                 Card(
                                     colors = CardDefaults.cardColors(
@@ -388,14 +416,14 @@ fun PlusDrawer(
                                 ) {
                                     Column(modifier = Modifier.padding(14.dp)) {
                                         Text(
-                                            text = "Détection Automatique d'Addons",
+                                            text = "Directives ADN Satellite HephaistOS",
                                             fontWeight = FontWeight.Bold,
                                             style = MaterialTheme.typography.titleMedium,
                                             color = MaterialTheme.colorScheme.onSurface
                                         )
                                         Spacer(modifier = Modifier.height(6.dp))
                                         Text(
-                                            text = "HephaistOS scrute en tâche de fond les applications Android portant le marqueur 'org.hephaistos.action.ADDON'. Dès l'installation d'une application compatible, elle s'affiche comme carte sur l'accueil et ses outils sont partagés avec tous.",
+                                            text = "Seules les applications déclarant l'ADN HephaistOS (action 'org.hephaistos.action.ADDON') sont reconnues comme satellites et affichées sur l'accueil. Les applications tierces et outils internes d'émulateur sont strictement ignorés.",
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
@@ -404,14 +432,105 @@ fun PlusDrawer(
                             }
 
                             item {
+                                Text(
+                                    text = "Template AndroidManifest.xml :",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+
+                            item {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(modifier = Modifier.padding(12.dp)) {
+                                        Text(
+                                            text = manifestTemplate,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 11.sp,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.End
+                                        ) {
+                                            OutlinedButton(
+                                                onClick = {
+                                                    clipboardManager.setText(AnnotatedString(manifestTemplate))
+                                                    Toast.makeText(context, "Template Manifest copié dans le presse-papier !", Toast.LENGTH_SHORT).show()
+                                                }
+                                            ) {
+                                                Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Text("Copier", fontSize = 12.sp)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            item {
                                 Button(
+                                    onClick = {
+                                        try {
+                                            val tplDir = WorkspaceManager.getSubDir(context, "Templates/SatelliteAppTemplate")
+                                            val manifestFile = File(tplDir, "AndroidManifest.xml")
+                                            manifestFile.writeText(
+                                                """
+                                                <?xml version="1.0" encoding="utf-8"?>
+                                                <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+                                                    package="com.example.hephaistos.satellite">
+                                                    <application
+                                                        android:allowBackup="true"
+                                                        android:label="Satellite HephaistOS"
+                                                        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+                                                        $manifestTemplate
+                                                    </application>
+                                                </manifest>
+                                                """.trimIndent()
+                                            )
+                                            val ktFile = File(tplDir, "MainActivity.kt")
+                                            ktFile.writeText(
+                                                """
+                                                package com.example.hephaistos.satellite
+
+                                                import android.app.Activity
+                                                import android.os.Bundle
+                                                import android.widget.TextView
+
+                                                class MainActivity : Activity() {
+                                                    override fun onCreate(savedInstanceState: Bundle?) {
+                                                        super.onCreate(savedInstanceState)
+                                                        val tv = TextView(this)
+                                                        tv.text = "Module Satellite HephaistOS Actif"
+                                                        setContentView(tv)
+                                                    }
+                                                }
+                                                """.trimIndent()
+                                            )
+                                            Toast.makeText(context, "Projet Template exporté dans sdcard/HEPHAISTOS/Templates/", Toast.LENGTH_LONG).show()
+                                        } catch (e: Exception) {
+                                            Toast.makeText(context, "Erreur export : ${e.message}", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Icon(Icons.Default.Download, contentDescription = null)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Exporter Projet Template Satellite")
+                                }
+                            }
+
+                            item {
+                                OutlinedButton(
                                     onClick = {
                                         onAddSampleAddon()
                                         onClose()
                                     },
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = MaterialTheme.colorScheme.primary
-                                    ),
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
                                     Icon(Icons.Default.Extension, contentDescription = null)
