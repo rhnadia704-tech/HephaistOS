@@ -103,22 +103,6 @@ fun HomeScreen(
         SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
     }
 
-    // Page 0: Core Master Ecosystem (first 5 apps: Hero + Quad)
-    val coreApps = compatibleApps.take(5)
-    val heroApp = coreApps.firstOrNull { it.isHero } ?: coreApps.firstOrNull()
-    val quadApps = coreApps.filter { !it.isHero }.take(4)
-
-    // Additional Pages: All subsequent apps chunked by 10 (max 10 apps per page)
-    val remainingApps = if (compatibleApps.size > 5) compatibleApps.drop(5) else emptyList()
-    val extraPages = if (remainingApps.isEmpty()) {
-        emptyList()
-    } else {
-        remainingApps.chunked(10)
-    }
-
-    val totalPages = if (compatibleApps.isEmpty()) 1 else (1 + extraPages.size)
-    val pagerState = rememberPagerState(pageCount = { totalPages })
-
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -128,61 +112,55 @@ fun HomeScreen(
         HomeHeader(
             timeString = timeString,
             railState = railState,
-            currentPage = pagerState.currentPage,
-            totalPages = totalPages,
+            currentPage = 0,
+            totalPages = 1,
             hasApps = compatibleApps.isNotEmpty(),
             onToggleRailFullscreen = onToggleRailFullscreen,
             onRefresh = onRefresh,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
         )
 
-        // Horizontal Pager: Page 0 = Master Ecosystem (or empty canvas), Pages 1+ = Dynamic Adaptive Containers
-        Box(
+        // Main Home Content: Clean and uncluttered, centering Unpack / Repack
+        LazyColumn(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+            contentPadding = PaddingValues(top = 12.dp, bottom = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            HorizontalPager(
-                state = pagerState,
-                modifier = Modifier.fillMaxSize()
-            ) { pageIndex ->
-                if (compatibleApps.isEmpty()) {
-                    // Empty interface with system Material 3 surface color, pure and clean, with quick-access card
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(MaterialTheme.colorScheme.background)
-                            .padding(20.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        UnpackRepackQuickCard(
-                            onOpenModule = onNavigateToUnpackRepack
-                        )
-                    }
-                } else if (pageIndex == 0) {
-                    // Page 0: Main Core Ecosystem with Unpack/Repack card
-                    CoreEcosystemPage(
-                        heroApp = heroApp,
-                        quadApps = quadApps,
-                        onOpenUnpackRepack = onNavigateToUnpackRepack,
-                        onAppClick = onAppClick
+            // Simple, clean Unpack / Repack Card
+            item {
+                UnpackRepackQuickCard(
+                    onOpenModule = onNavigateToUnpackRepack
+                )
+            }
+
+            // Real installed applications section (only shown if real apps exist on device)
+            if (compatibleApps.isNotEmpty()) {
+                item {
+                    Text(
+                        text = "Applications installées (${compatibleApps.size})",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
                     )
-                } else {
-                    // Page 1+: Adaptive Dynamic Container Layout (up to 10 apps)
-                    val pageApps = extraPages.getOrElse(pageIndex - 1) { emptyList() }
-                    AdaptiveAppsPage(
-                        pageNumber = pageIndex + 1,
-                        apps = pageApps,
-                        onAppClick = onAppClick
+                }
+
+                items(compatibleApps, key = { it.id }) { app ->
+                    InstalledAppRowCard(
+                        app = app,
+                        onClick = { onAppClick(app) }
                     )
                 }
             }
         }
 
-        // Bottom Page Indicator & Swipe-Up Pull Hint for Terminal
+        // Bottom Pill Bar for Terminal (requires long-press or strong drag up)
         BottomNavigationPillBar(
-            currentPage = pagerState.currentPage,
-            totalPages = totalPages,
+            currentPage = 0,
+            totalPages = 1,
             onSwipeUp = onSwipeUpToOpenTerminal
         )
     }
@@ -1199,22 +1177,13 @@ fun UnpackRepackQuickCard(
                         modifier = Modifier.size(24.dp)
                     )
                 }
-                Spacer(modifier = Modifier.width(12.dp))
-                Column {
-                    Text(
-                        text = "Unpack / Repack",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = "sdcard/HEPHAISTOS/UNPACKED & PACKED",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp
-                    )
-                }
+                Spacer(modifier = Modifier.width(14.dp))
+                Text(
+                    text = "Unpack Repack",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
             }
 
             Button(
@@ -1229,6 +1198,84 @@ fun UnpackRepackQuickCard(
                     imageVector = Icons.AutoMirrored.Filled.ArrowForward,
                     contentDescription = null,
                     modifier = Modifier.size(14.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun InstalledAppRowCard(
+    app: CompatibleApp,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    ElevatedCard(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .testTag("installed_app_${app.id}"),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(MaterialTheme.colorScheme.secondaryContainer),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = getIconForApp(app.iconKey),
+                        contentDescription = app.name,
+                        tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Column {
+                    Text(
+                        text = app.name,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = app.packageName,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            IconButton(
+                onClick = onClick,
+                modifier = Modifier.size(36.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                    contentDescription = "Lancer",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp)
                 )
             }
         }

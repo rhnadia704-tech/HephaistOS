@@ -16,28 +16,33 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Java JDK 17
+      - name: Set up Java JDK 21 (Required for AGP 9.1.1)
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
+          java-version: '21'
           distribution: 'temurin'
 
-      - name: Setup Gradle
+      - name: Setup Gradle 9
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.11.1'
+          gradle-version: '9.0'
 
-      - name: Restore Debug Keystore
+      - name: Ensure Debug Keystore
         run: |
-          if [ -f debug.keystore.base64 ] && [ ! -f debug.keystore ]; then
+          if [ -f debug.keystore.base64 ]; then
             echo "Restoring debug.keystore from base64..."
-            base64 -d debug.keystore.base64 > debug.keystore
+            base64 -d debug.keystore.base64 > debug.keystore 2>/dev/null || base64 --decode debug.keystore.base64 > debug.keystore || true
+          fi
+          if [ ! -f debug.keystore ]; then
+            echo "Generating debug.keystore via keytool..."
+            keytool -genkeypair -alias androiddebugkey -keypass android -keystore debug.keystore -storepass android -dname "CN=Android Debug,O=Android,C=US" -validity 10000 -keyalg RSA -keysize 2048
           fi
 
-      - name: Ensure .env.example exists
+      - name: Ensure environment configuration (.env)
         run: |
-          if [ ! -f .env ] && [ -f .env.example ]; then
-            cp .env.example .env
+          touch .env
+          if [ -f .env.example ]; then
+            cat .env.example >> .env
           fi
 
       - name: Compile Debug APK
