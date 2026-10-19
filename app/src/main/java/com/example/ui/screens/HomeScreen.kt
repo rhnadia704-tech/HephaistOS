@@ -136,11 +136,11 @@ fun HomeScreen(
                 )
             }
 
-            // Real installed applications section (only shown if real apps exist on device)
+            // Real HephaistOS satellites section (only shown if real satellites exist on device)
             if (compatibleApps.isNotEmpty()) {
                 item {
                     Text(
-                        text = "Applications installées (${compatibleApps.size})",
+                        text = "Satellites HephaistOS connectés (${compatibleApps.size})",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface,

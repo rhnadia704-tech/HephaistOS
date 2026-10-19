@@ -97,9 +97,9 @@ object PdfExporterService {
         drawSectionTitle(c2, "2.1 Déclaration Obligatoire dans AndroidManifest.xml", 40f, y)
         y += 18f
         val textApkIntro = listOf(
-            "Une application Android Satellite est un APK autonome installé sur l'appareil. Dès son installation,",
-            "HephaistOS la détecte instantanément via BroadcastReceiver dynamique sans nécessiter de redémarrage.",
-            "Le Manifeste de l'APK satellite DOIT comporter les filtres suivants :"
+            "Un APK Satellite est une extension autonome installée sur l'appareil. HephaistOS filtre strictement",
+            "l'accueil en n'affichant que les satellites dotés de l'ADN requis (toutes les autres applications du téléphone",
+            "sont exclues). Le Manifeste de l'APK satellite DOIT obligatoirement comporter les filtres suivants :"
         )
         y = drawTextParagraph(c2, textApkIntro, 40f, y)
         y += 8f

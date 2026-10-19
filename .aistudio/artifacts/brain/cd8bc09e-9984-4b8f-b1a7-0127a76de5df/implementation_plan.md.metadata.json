@@ -1,6 +1,6 @@
 {
-  "summary": "Plan d'implémentation complet pour HephaistOS : fiabilisation de la gestuelle du Terminal, carte d'accueil Unpack/Repack épurée, templates complets de scripts et webapps, export PDF enrichi du guide et templates de satellites, détection dynamique automatique en temps réel des installations et désinstallations d'applications, vérification proactive du stockage et du root au lancement avec mode restreint élégant, et configuration de la CI GitHub Actions pour la génération automatique de l'APK Debug.",
-  "updatedAt": "2026-10-18T08:15:48.610334313Z",
+  "summary": "Plan d'implémentation pour le filtrage strict des satellites HephaistOS selon leur ADN officiel, l'enrichissement des directives et templates dans les paramètres, et l'extraction réelle intégrale des fichiers de partition dans le moteur Unpack.",
+  "updatedAt": "2026-10-19T08:23:41.299622809Z",
   "requestFeedback": true,
   "userFacing": true
 }

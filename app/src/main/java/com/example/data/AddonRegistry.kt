@@ -83,7 +83,7 @@ object AddonRegistry {
                         packageName = pkgName,
                         version = version,
                         description = "Satellite HephaistOS détecté. Outils : ${capabilities.joinToString(", ")}",
-                        category = "Satellite Natif",
+                        category = "Satellite HephaistOS",
                         isHero = false,
                         isInstalled = true,
                         isHeavyTask = false,
@@ -97,50 +97,6 @@ object AddonRegistry {
             }
         } catch (_: Exception) {}
 
-        // 2. Discover user-installed non-system launchable apps
-        try {
-            val mainIntent = Intent(Intent.ACTION_MAIN, null).apply {
-                addCategory(Intent.CATEGORY_LAUNCHER)
-            }
-            val launchableList = pm.queryIntentActivities(mainIntent, 0)
-            for (resolveInfo in launchableList) {
-                val appInfo = resolveInfo.activityInfo?.applicationInfo ?: continue
-                val pkgName = appInfo.packageName
-                if (pkgName == context.packageName || seenPackages.contains(pkgName)) continue
-
-                val isSystem = (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0
-                if (!isSystem) {
-                    val label = pm.getApplicationLabel(appInfo).toString()
-                    if (isIgnoredPackage(pkgName, label)) continue
-                    seenPackages.add(pkgName)
-
-                    val version = try {
-                        pm.getPackageInfo(pkgName, 0).versionName ?: "v1.0"
-                    } catch (_: Exception) {
-                        "v1.0"
-                    }
-
-                    discovered.add(
-                        CompatibleApp(
-                            id = "app_$pkgName",
-                            name = label,
-                            packageName = pkgName,
-                            version = version,
-                            description = "Application installée ($pkgName)",
-                            category = "App Installée",
-                            isHero = false,
-                            isInstalled = true,
-                            isHeavyTask = false,
-                            status = "Prêt",
-                            statusColor = 0xFF4CAF50,
-                            iconKey = "build",
-                            appType = AppType.NATIVE_ADDON,
-                            capabilities = listOf("app.launch")
-                        )
-                    )
-                }
-            }
-        } catch (_: Exception) {}
         return discovered
     }
 }

@@ -908,14 +908,35 @@ private fun AddonTemplateTab(
 
 @Composable
 private fun ApkSatelliteTemplateView() {
-    Column {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        // Directives Banner on HephaistOS DNA
+        Surface(
+            color = MaterialTheme.colorScheme.primaryContainer,
+            shape = RoundedCornerShape(10.dp)
+        ) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Text(
+                    text = "ADN REQUIS POUR ÊTRE DÉTECTÉ PAR HEPHAISTOS",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "HephaistOS applique un filtrage strict par signature. Les applications ordinaires du téléphone (Gmail, Téléphone, banques...) sont systématiquement exclues de l'accueil. Pour être reconnu comme satellite, votre APK doit obligatoirement déclarer l'action d'intention ci-dessous.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    lineHeight = 16.sp
+                )
+            }
+        }
+
         Text(
-            text = "1. Marqueur AndroidManifest.xml obligatoire :",
+            text = "1. Marqueur AndroidManifest.xml obligatoire (ADN) :",
             fontWeight = FontWeight.SemiBold,
             fontSize = 13.sp,
             color = MaterialTheme.colorScheme.onSurface
         )
-        Spacer(modifier = Modifier.height(4.dp))
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -928,14 +949,16 @@ private fun ApkSatelliteTemplateView() {
                 <activity android:name=".MainActivity" android:exported="true">
                     <intent-filter>
                         <action android:name="android.intent.action.MAIN" />
-                        <!-- Marqueur d'identification HephaistOS -->
+                        <!-- ADN UNIQUE HEPHAISTOS OBLIGATOIRE -->
                         <action android:name="org.hephaistos.action.ADDON" />
                         <category android:name="org.hephaistos.category.ADDON" />
                         <category android:name="android.intent.category.DEFAULT" />
                     </intent-filter>
+                    
+                    <!-- Liste des capacités déclarées séparées par des virgules -->
                     <meta-data
                         android:name="org.hephaistos.addon.CAPABILITIES"
-                        android:value="gsi.unpack,rom.repack,payload.dumper,erofs.tools" />
+                        android:value="kitchen.unpack,kitchen.repack,payload.dumper,erofs.tools" />
                 </activity>
                 """.trimIndent(),
                 fontFamily = FontFamily.Monospace,
@@ -944,14 +967,12 @@ private fun ApkSatelliteTemplateView() {
             )
         }
 
-        Spacer(modifier = Modifier.height(10.dp))
         Text(
-            text = "2. Réception des requêtes IPC (BroadcastReceiver) :",
+            text = "2. Réception des requêtes IPC et exécution (Kotlin) :",
             fontWeight = FontWeight.SemiBold,
             fontSize = 13.sp,
             color = MaterialTheme.colorScheme.onSurface
         )
-        Spacer(modifier = Modifier.height(4.dp))
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -961,11 +982,21 @@ private fun ApkSatelliteTemplateView() {
         ) {
             Text(
                 text = """
-                class SatelliteReceiver : BroadcastReceiver() {
+                class HephaistosSatelliteReceiver : BroadcastReceiver() {
                     override fun onReceive(context: Context, intent: Intent) {
                         if (intent.action == "org.hephaistos.action.INVOKE_TOOL") {
-                            val target = intent.getStringExtra("TARGET_DIR")
-                            // Traitement du désassemblage/réassemblage
+                            val targetPath = intent.getStringExtra("TARGET_DIR") ?: return
+                            val command = intent.getStringExtra("COMMAND") ?: "inspect"
+                            
+                            // 1. Exécution de la tâche modulaire
+                            val success = processSatelliteTask(targetPath, command)
+                            
+                            // 2. Notification de résultat à l'hôte HephaistOS
+                            val response = Intent("org.hephaistos.action.TASK_RESULT").apply {
+                                putExtra("STATUS", if (success) "SUCCESS" else "ERROR")
+                                putExtra("LOGS", "Tâche [${'$'}command] terminée.")
+                            }
+                            context.sendBroadcast(response)
                         }
                     }
                 }
