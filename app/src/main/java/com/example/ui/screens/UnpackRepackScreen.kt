@@ -19,6 +19,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
@@ -904,6 +909,19 @@ private fun ExecutionLogCard(
     errorMessage: String?,
     onOpenTerminal: () -> Unit
 ) {
+    val animatedProgress by animateFloatAsState(
+        targetValue = progress.coerceIn(0f, 1f),
+        animationSpec = spring(dampingRatio = 0.85f, stiffness = Spring.StiffnessLow),
+        label = "exec_progress_anim"
+    )
+
+    val logListState = rememberLazyListState()
+    LaunchedEffect(logs.size) {
+        if (logs.isNotEmpty()) {
+            logListState.animateScrollToItem(logs.size - 1)
+        }
+    }
+
     ElevatedCard(
         modifier = Modifier
             .fillMaxWidth()
@@ -941,7 +959,7 @@ private fun ExecutionLogCard(
                 }
 
                 Text(
-                    text = "${(progress * 100).toInt()}%",
+                    text = "${(animatedProgress * 100).toInt()}%",
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary
@@ -951,7 +969,7 @@ private fun ExecutionLogCard(
             Spacer(modifier = Modifier.height(10.dp))
 
             LinearProgressIndicator(
-                progress = { progress },
+                progress = { animatedProgress },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(6.dp)
@@ -968,7 +986,7 @@ private fun ExecutionLogCard(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Embedded Terminal Logs Window
+            // Embedded Terminal Logs Window with auto-scroll
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -977,6 +995,7 @@ private fun ExecutionLogCard(
                 color = Color(0xFF141414)
             ) {
                 LazyColumn(
+                    state = logListState,
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(10.dp)

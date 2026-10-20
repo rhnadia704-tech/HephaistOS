@@ -1,6 +1,6 @@
 {
-  "summary": "Plan d'implémentation pour le moteur Unpack et Repack inspiré du dépôt officiel UKA (blackeangel/UKA) avec prise en charge intelligente avec ou sans root, contournement de la limite de 64 octets losetup, extraction totale de tous les fichiers et gestion avancée des symlinks et permissions.",
-  "updatedAt": "2026-10-19T11:42:16.268730304Z",
-  "requestFeedback": true,
-  "userFacing": true
+  "summary":  "Plan d'implémentation pour optimiser la progression en direct du moteur Unpack UKA (élimination du gel à 25%, décompte des Mo et des fichiers en temps réel avec terminal auto-défilant) et moderniser le rail de navigation latéral avec une transition ressort élégante, des libellés horizontaux nets et une élévation soignée.",
+  "updatedAt":  "2026-10-20T18:30:03.500520578Z",
+  "requestFeedback":  true,
+  "userFacing":  true
 }

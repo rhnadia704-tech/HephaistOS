@@ -4,7 +4,11 @@ import android.content.Context
 import com.example.model.PartitionInfo
 import com.example.model.RomTargetType
 import com.example.model.TargetMetadata
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -357,10 +361,12 @@ object UkaEngine {
                 // Partition files & RAW images (like Infinity312.img, GSI, etc.)
                 val totalParts = partitionsToExtract.size.coerceAtLeast(1)
                 for ((index, partName) in partitionsToExtract.withIndex()) {
-                    val partProgress = 0.25f + ((index.toFloat() / totalParts) * 0.45f)
+                    val basePartProgress = 0.20f + ((index.toFloat() / totalParts) * 0.55f)
+                    val partWeight = 0.55f / totalParts.toFloat()
+
                     onProgress(
-                        "Extraction réelle de la partition $partName [$index/$totalParts]...",
-                        partProgress,
+                        "Démarrage de l'extraction de $partName...",
+                        basePartProgress,
                         "[UKA] Démarrage extraction $partName (${formatFileSize(targetFile.length())})..."
                     )
 
@@ -369,19 +375,22 @@ object UkaEngine {
                         partitionDir.mkdirs()
                     }
 
-                    // Real extraction of the full partition and files
+                    // Real extraction of the full partition and files with live sub-progress
                     val extractedCount = extractRealPartition(
                         targetFile = targetFile,
                         partName = partName,
                         destDir = partitionDir,
                         isRooted = isRooted,
                         isSparse = metadata.isSparse,
-                        onLog = { logMsg -> onProgress("Extraction $partName...", partProgress, logMsg) }
+                        onProgressUpdate = { subStep, subRatio, logMsg ->
+                            val currentProg = (basePartProgress + (subRatio * partWeight)).coerceIn(0.20f, 0.78f)
+                            onProgress(subStep, currentProg, logMsg)
+                        }
                     )
 
                     onProgress(
                         "Partition $partName extraite avec succès ($extractedCount éléments)",
-                        partProgress + (0.45f / totalParts),
+                        basePartProgress + partWeight,
                         "[OK] $partName : extraction réelle terminée ($extractedCount éléments extraits)."
                     )
                 }
@@ -620,13 +629,14 @@ object UkaEngine {
     /**
      * Executes root-privileged loop mount bypassing the Linux kernel 64-byte path limit
      * (LO_NAME_SIZE = 64) by establishing an ultra-short symbolic link in /data/local/tmp/uka_in.raw (23 bytes).
-     * Extracts all files, directories, symlinks and permissions recursively using cp -a & tar.
+     * Extracts all files, directories, symlinks and permissions with high-performance tar streaming,
+     * live disk probe in background, and Kotlin heartbeat timer guaranteeing continuous non-freezing progression.
      */
     private suspend fun mountAndExtractLoopWithShortPath(
         imageFile: File,
         destDir: File,
         isSparse: Boolean,
-        onLog: (String) -> Unit
+        onProgressUpdate: (step: String, fraction: Float, logLine: String) -> Unit
     ): Int {
         val shortLink = "/data/local/tmp/uka_in.raw"
         val unsparseTmp = "/data/local/tmp/uka_raw.img"
@@ -637,16 +647,14 @@ object UkaEngine {
             // Step 1: Handle sparse conversion if required
             val effectiveSourcePath: String
             if (isSparse) {
-                onLog("[UKA SPARSE] Image sparse détectée. Décompression préalable pour le montage loop du noyau...")
+                onProgressUpdate("Décompression sparse préalable...", 0.03f, "[UKA SPARSE] Image sparse détectée. Décompression préalable pour le montage loop du noyau...")
                 val tmpRaw = File(unsparseTmp)
                 val unsparseSuccess = unsparseImage(imageFile, tmpRaw) { pct ->
-                    if ((pct * 100).toInt() % 25 == 0) {
-                        onLog("[SPARSE] Décompression : ${(pct * 100).toInt()}%")
-                    }
+                    onProgressUpdate("Décompression sparse (${(pct * 100).toInt()}%)...", 0.03f + (pct * 0.07f), "[SPARSE] Décompression : ${(pct * 100).toInt()}%")
                 }
                 if (unsparseSuccess && tmpRaw.exists() && tmpRaw.length() > 0) {
                     effectiveSourcePath = unsparseTmp
-                    onLog("[UKA SPARSE] Décompression terminée : ${formatFileSize(tmpRaw.length())}")
+                    onProgressUpdate("Image RAW prête", 0.10f, "[UKA SPARSE] Décompression terminée : ${formatFileSize(tmpRaw.length())}")
                 } else {
                     effectiveSourcePath = imageFile.absolutePath
                 }
@@ -656,17 +664,17 @@ object UkaEngine {
 
             // Step 2: Establish ultra-short link in /data/local/tmp/uka_in.raw (< 25 bytes)
             // Strictly solves the "losetup: > 64 bytes ; mount: losetup failed" Android kernel limitation!
-            onLog("[UKA 64-BYTE BYPASS] Normalisation du chemin : création de l'alias court $shortLink...")
+            onProgressUpdate("Création de l'alias court...", 0.12f, "[UKA 64-BYTE BYPASS] Normalisation du chemin : création de l'alias court $shortLink...")
             RootDelegator.executePrivilegedCommand("mkdir -p /data/local/tmp") { }
             RootDelegator.executePrivilegedCommand("rm -f $shortLink") { }
             RootDelegator.executePrivilegedCommand("ln -sf '$effectiveSourcePath' $shortLink && chmod 777 $shortLink") { line ->
-                onLog("[SHORT LINK] $line")
+                onProgressUpdate("Alias court créé", 0.14f, "[SHORT LINK] $line")
             }
 
             RootDelegator.executePrivilegedCommand("mkdir -p $mountDir") { }
             RootDelegator.executePrivilegedCommand("mkdir -p '${destDir.absolutePath}'") { }
 
-            // Step 3: Find free loop device or create node, bind loop read-only, and mount
+            // Step 3: Find free loop device or create node, bind loop read-only, mount, and streaming extraction
             val mountScript = """
                 LOOP=${'$'}(losetup -f 2>/dev/null)
                 if [ -z "${'$'}LOOP" ]; then
@@ -705,21 +713,42 @@ object UkaEngine {
                 
                 if [ ${'$'}MOUNT_OK -eq 1 ] || [ ${'$'}(ls $mountDir 2>/dev/null | wc -l) -gt 0 ]; then
                     echo "HEPHAISTOS_MOUNT_SUCCESS"
-                    # Full copy of all files and folders preserving permissions & symlinks
-                    cp -a $mountDir/. '${destDir.absolutePath}/' 2>/dev/null
                     
-                    COUNT=${'$'}(ls -A '${destDir.absolutePath}' 2>/dev/null | wc -l)
-                    if [ "${'$'}COUNT" -le 1 ]; then
-                        (cd $mountDir && tar -cf - .) | (cd '${destDir.absolutePath}' && tar -xf -) 2>/dev/null
+                    # Background probe tracking written megabytes on destination
+                    (
+                        while [ -d "$mountDir" ]; do
+                            sleep 1
+                            if [ -d "$mountDir" ]; then
+                                SZ=${'$'}(du -sm '${destDir.absolutePath}' 2>/dev/null | cut -f1)
+                                [ -n "${'$'}SZ" ] && echo "DISK_EXTRACTED_PROGRESS:${'$'}SZ"
+                            fi
+                        done
+                    ) &
+                    PROBE_PID=${'$'}!
+                    
+                    # High performance streaming extraction with tar (preserves symlinks, perms and streams item paths)
+                    if which tar >/dev/null 2>&1; then
+                        echo "EXTRACTION_PIPELINE:TAR"
+                        (cd "$mountDir" && tar -cf - .) | (cd '${destDir.absolutePath}' && tar -vxf -) 2>&1 | while read -r line; do
+                            echo "EXTR_ITEM:${'$'}line"
+                        done
+                    else
+                        echo "EXTRACTION_PIPELINE:CP"
+                        cp -av "$mountDir/." '${destDir.absolutePath}/' 2>&1 | while read -r line; do
+                            echo "EXTR_ITEM:${'$'}line"
+                        done
                     fi
                     
-                    # Capture symlinks according to UKA standard
+                    kill ${'$'}PROBE_PID 2>/dev/null
+                    wait ${'$'}PROBE_PID 2>/dev/null
+                    
+                    echo "CAPTURING_SYMLINKS"
                     (cd $mountDir && find . -type l 2>/dev/null | while read -r l; do
                         target=${'$'}(readlink "${'$'}l")
                         echo "${'$'}{l#./} -> ${'$'}target"
                     done) > '${destDir.absolutePath}/symlinks.txt'
                     
-                    # Capture fs_config
+                    echo "CAPTURING_METADATA"
                     (cd $mountDir && find . 2>/dev/null | while read -r f; do
                         rel="${'$'}{f#./}"
                         if [ -n "${'$'}rel" ]; then
@@ -727,13 +756,12 @@ object UkaEngine {
                         fi
                     done) > '${destDir.absolutePath}/fs_config'
                     
-                    # Capture SELinux file contexts
                     (cd $mountDir && ls -lZd ${'$'}(find . -maxdepth 3 2>/dev/null) 2>/dev/null) > '${destDir.absolutePath}/file_contexts'
                     
-                    # Adjust permissions so all file managers (ZArchiver, MT Manager, etc.) can inspect
                     chmod -R 775 '${destDir.absolutePath}' 2>/dev/null
                     
-                    echo "EXTRACTED_COUNT:"${'$'}(ls -A '${destDir.absolutePath}' 2>/dev/null | wc -l)
+                    FINAL_COUNT=${'$'}(find '${destDir.absolutePath}' -maxdepth 2 2>/dev/null | wc -l)
+                    echo "EXTRACTED_COUNT:${'$'}FINAL_COUNT"
                 else
                     echo "HEPHAISTOS_MOUNT_FAILED"
                 fi
@@ -745,31 +773,107 @@ object UkaEngine {
                 rm -rf $mountDir $shortLink $unsparseTmp 2>/dev/null
             """.trimIndent()
 
-            RootDelegator.executePrivilegedCommand(mountScript) { line ->
-                when {
-                    line.contains("ATTACHED_LOOP:") -> {
-                        val loopDev = line.substringAfter("ATTACHED_LOOP:").trim()
-                        onLog("[PERIPHERIQUE LOOP] Loop attribué : $loopDev")
+            val totalExpectedMb = (imageFile.length() / (1024L * 1024L)).coerceAtLeast(100L).toInt()
+            var extractedItemsCount = 0
+            var currentDiskMb = 0
+            var lastEmissionTime = System.currentTimeMillis()
+            var isFinished = false
+
+            coroutineScope {
+                // Heartbeat pulse ensuring UI and progress never stay frozen during long I/O
+                val heartbeatJob = launch(Dispatchers.Default) {
+                    var elapsedSec = 0
+                    while (!isFinished && isActive) {
+                        delay(800)
+                        elapsedSec++
+                        val now = System.currentTimeMillis()
+                        if (now - lastEmissionTime >= 1200) {
+                            val prog = if (totalExpectedMb > 0 && currentDiskMb > 0) {
+                                (0.22f + ((currentDiskMb.toFloat() / totalExpectedMb.toFloat()) * 0.62f)).coerceIn(0.25f, 0.86f)
+                            } else {
+                                (0.25f + (elapsedSec * 0.005f)).coerceIn(0.25f, 0.85f)
+                            }
+                            val mbText = if (currentDiskMb > 0) "$currentDiskMb / $totalExpectedMb Mo" else "$elapsedSec s"
+                            onProgressUpdate(
+                                "Déballage partition : $mbText ($extractedItemsCount éléments)...",
+                                prog,
+                                "[DÉBALLAGE ACTIF] $mbText traités ($extractedItemsCount éléments déballés)..."
+                            )
+                        }
                     }
-                    line.contains("HEPHAISTOS_MOUNT_SUCCESS") -> {
-                        onLog("[MONTAGE RÉUSSI] Système de fichiers monté avec succès via le loop device !")
+                }
+
+                try {
+                    RootDelegator.executePrivilegedCommand(mountScript) { line ->
+                        val now = System.currentTimeMillis()
+                        when {
+                            line.contains("ATTACHED_LOOP:") -> {
+                                val loopDev = line.substringAfter("ATTACHED_LOOP:").trim()
+                                onProgressUpdate("Boucle loop assignée ($loopDev)...", 0.16f, "[PERIPHERIQUE LOOP] Loop attribué : $loopDev")
+                            }
+                            line.contains("HEPHAISTOS_MOUNT_SUCCESS") -> {
+                                onProgressUpdate("Système de fichiers monté !", 0.22f, "[MONTAGE RÉUSSI] Système de fichiers monté avec succès via le loop device !")
+                            }
+                            line.contains("DISK_EXTRACTED_PROGRESS:") -> {
+                                val mb = line.substringAfter("DISK_EXTRACTED_PROGRESS:").trim().toIntOrNull() ?: 0
+                                if (mb > 0) {
+                                    currentDiskMb = maxOf(currentDiskMb, mb)
+                                    lastEmissionTime = now
+                                    val prog = (0.22f + ((currentDiskMb.toFloat() / totalExpectedMb.toFloat()) * 0.62f)).coerceIn(0.25f, 0.86f)
+                                    onProgressUpdate(
+                                        "Déballage partition : $currentDiskMb / $totalExpectedMb Mo ($extractedItemsCount fichiers)...",
+                                        prog,
+                                        "[DÉBIT DISQUE] $currentDiskMb / $totalExpectedMb Mo décompressés ($extractedItemsCount fichiers)"
+                                    )
+                                }
+                            }
+                            line.contains("EXTR_ITEM:") -> {
+                                extractedItemsCount++
+                                val rawName = line.substringAfter("EXTR_ITEM:").trim().removePrefix("./").removePrefix("'").substringBefore("' ->")
+                                if (extractedItemsCount % 15 == 0 || now - lastEmissionTime >= 250 || rawName.endsWith(".apk") || rawName.endsWith(".jar") || rawName.endsWith(".so")) {
+                                    lastEmissionTime = now
+                                    val prog = if (totalExpectedMb > 0 && currentDiskMb > 0) {
+                                        (0.22f + ((currentDiskMb.toFloat() / totalExpectedMb.toFloat()) * 0.62f)).coerceIn(0.25f, 0.86f)
+                                    } else {
+                                        (0.25f + ((extractedItemsCount.toFloat() / 2500f) * 0.58f)).coerceIn(0.25f, 0.86f)
+                                    }
+                                    val mbText = if (currentDiskMb > 0) "$currentDiskMb / $totalExpectedMb Mo • " else ""
+                                    onProgressUpdate(
+                                        "Extraction : $rawName ($mbText$extractedItemsCount fichiers)...",
+                                        prog,
+                                        "[COPIE] $rawName ($extractedItemsCount fichiers)"
+                                    )
+                                }
+                            }
+                            line.contains("CAPTURING_SYMLINKS") -> {
+                                onProgressUpdate("Capture des liens symboliques...", 0.87f, "[SYMLINK] Sauvegarde des liens symboliques (symlinks.txt)...")
+                            }
+                            line.contains("CAPTURING_METADATA") -> {
+                                onProgressUpdate("Capture descripteurs et SELinux...", 0.89f, "[METADATA] Sauvegarde des permissions POSIX et contextes SELinux (fs_config)...")
+                            }
+                            line.contains("EXTRACTED_COUNT:") -> {
+                                itemsCount = line.substringAfter("EXTRACTED_COUNT:").trim().toIntOrNull() ?: extractedItemsCount
+                                onProgressUpdate("Arborescence extraite ($itemsCount éléments)", 0.90f, "[COPIE INTÉGRALE] $itemsCount éléments déballés avec permissions et symlinks d'origine.")
+                            }
+                            line.contains("HEPHAISTOS_MOUNT_FAILED") -> {
+                                onProgressUpdate("Montage loop échoué", 0.20f, "[AVERTISSEMENT] Le montage loop a échoué (format de partition spécifique).")
+                            }
+                            else -> if (!line.startsWith("[STDERR]")) {
+                                onProgressUpdate("Traitement partition...", 0.35f, "[MOUNT] $line")
+                            }
+                        }
                     }
-                    line.contains("EXTRACTED_COUNT:") -> {
-                        itemsCount = line.substringAfter("EXTRACTED_COUNT:").trim().toIntOrNull() ?: 0
-                        onLog("[COPIE INTÉGRALE] $itemsCount éléments déballés avec permissions et symlinks d'origine.")
-                    }
-                    line.contains("HEPHAISTOS_MOUNT_FAILED") -> {
-                        onLog("[AVERTISSEMENT] Le montage loop a échoué (format de partition spécifique).")
-                    }
-                    else -> if (!line.startsWith("[STDERR]")) onLog("[MOUNT] $line")
+                } finally {
+                    isFinished = true
+                    heartbeatJob.cancel()
                 }
             }
 
             if (itemsCount == 0 && destDir.exists()) {
-                itemsCount = destDir.listFiles()?.size ?: 0
+                itemsCount = destDir.listFiles()?.size ?: extractedItemsCount
             }
         } catch (e: Exception) {
-            onLog("[EXCEPTION LOOP] ${e.message}")
+            onProgressUpdate("Erreur loop", 0f, "[EXCEPTION LOOP] ${e.message}")
         }
 
         return itemsCount
@@ -843,34 +947,34 @@ object UkaEngine {
         destDir: File,
         isRooted: Boolean,
         isSparse: Boolean,
-        onLog: (String) -> Unit
+        onProgressUpdate: (step: String, fraction: Float, logLine: String) -> Unit
     ): Int {
         var itemsExtracted = 0
         var loopExtractionSucceeded = false
 
         // 1. If Root is available, execute real loop mount with short path bypass (< 64 bytes)
         if (isRooted) {
-            onLog("[MODE ROOT PRIVILÉGIÉ] Montage loop UKA avec contournement de la limite de 64 octets...")
+            onProgressUpdate("Montage loop UKA avec contournement 64 octets...", 0.05f, "[MODE ROOT PRIVILÉGIÉ] Montage loop UKA avec contournement de la limite de 64 octets...")
             val extracted = mountAndExtractLoopWithShortPath(
                 imageFile = targetFile,
                 destDir = destDir,
                 isSparse = isSparse,
-                onLog = onLog
+                onProgressUpdate = onProgressUpdate
             )
             if (extracted > 0) {
                 itemsExtracted = extracted
                 loopExtractionSucceeded = true
-                onLog("[SUCCÈS DÉBALLAGE] $extracted fichiers et répertoires réels extraits avec succès !")
+                onProgressUpdate("Déballage réel terminé ($extracted éléments)", 0.95f, "[SUCCÈS DÉBALLAGE] $extracted fichiers et répertoires réels extraits avec succès !")
             }
         }
 
         // 2. If loop extraction did not succeed (or non-root), try userspace extraction tools (7z, bsdtar, lpunpack)
         if (!loopExtractionSucceeded) {
-            onLog("[MODE USERSPACE] Recherche d'utilitaires d'extraction non-root...")
+            onProgressUpdate("Recherche d'utilitaires d'extraction non-root...", 0.10f, "[MODE USERSPACE] Recherche d'utilitaires d'extraction non-root...")
             val userspaceExtracted = extractWithUserspaceTools(
                 targetFile = targetFile,
                 destDir = destDir,
-                onLog = onLog
+                onLog = { msg -> onProgressUpdate("Extraction user-space...", 0.30f, msg) }
             )
             if (userspaceExtracted > 0) {
                 itemsExtracted = userspaceExtracted
@@ -881,33 +985,70 @@ object UkaEngine {
         if (isSparse) {
             val unsparseFile = File(destDir, "$partName.raw.img")
             if (!unsparseFile.exists() || unsparseFile.length() < 1024) {
-                onLog("[UKA SPARSE] Décompression de l'image Sparse (simg2img) vers ${unsparseFile.name}...")
+                onProgressUpdate("Décompression sparse...", 0.20f, "[UKA SPARSE] Décompression de l'image Sparse (simg2img) vers ${unsparseFile.name}...")
                 val ok = unsparseImage(targetFile, unsparseFile) { pct ->
-                    if ((pct * 100).toInt() % 25 == 0) {
-                        onLog("[SPARSE] Décompression : ${(pct * 100).toInt()}%")
-                    }
+                    onProgressUpdate("Décompression sparse (${(pct * 100).toInt()}%)...", 0.20f + (pct * 0.30f), "[SPARSE] Décompression : ${(pct * 100).toInt()}%")
                 }
                 if (ok && unsparseFile.exists()) {
                     itemsExtracted++
-                    onLog("[OK SPARSE] Image brute décompressée : ${unsparseFile.name} (${formatFileSize(unsparseFile.length())})")
+                    onProgressUpdate("Image brute décompressée", 0.50f, "[OK SPARSE] Image brute décompressée : ${unsparseFile.name} (${formatFileSize(unsparseFile.length())})")
                 }
             }
         }
 
-        // 4. Save raw partition image for bit-for-bit repack
+        // 4. Save or link raw partition image into destination directory
+        // Candidate .img blocks are preserved so UKA Repack can rebuild identical bootable images (which booted on DSU sideloader!)
         val destImgFile = File(destDir, "$partName.img")
         if (!destImgFile.exists() || destImgFile.length() != targetFile.length()) {
-            onLog("[UKA COPIE] Enregistrement de l'image de partition brute (${formatFileSize(targetFile.length())})...")
+            var linked = false
             try {
-                FileInputStream(targetFile).channel.use { src ->
-                    FileOutputStream(destImgFile).channel.use { dst ->
-                        dst.transferFrom(src, 0, src.size())
+                if (targetFile.parentFile?.canonicalPath == destDir.canonicalPath) {
+                    linked = true
+                } else {
+                    val linkProc = Runtime.getRuntime().exec(arrayOf("ln", targetFile.absolutePath, destImgFile.absolutePath))
+                    if (linkProc.waitFor() == 0 && destImgFile.exists() && destImgFile.length() > 0) {
+                        linked = true
+                        onProgressUpdate("Liaison blocs intègres (0s)...", 0.92f, "[LIEN RAPIDE] Blocs de partition liés instantanément.")
                     }
                 }
+            } catch (_: Exception) {}
+
+            if (!linked) {
+                onProgressUpdate("Sauvegarde blocs partition...", 0.90f, "[COPIE BLOCS] Sauvegarde de l'image de partition (${formatFileSize(targetFile.length())})...")
+                try {
+                    val buffer = ByteArray(4 * 1024 * 1024)
+                    val totalBytes = targetFile.length()
+                    var totalCopied = 0L
+                    var lastNotified = 0L
+                    FileInputStream(targetFile).use { fis ->
+                        FileOutputStream(destImgFile).use { fos ->
+                            while (true) {
+                                val r = fis.read(buffer)
+                                if (r == -1) break
+                                fos.write(buffer, 0, r)
+                                totalCopied += r
+                                if (totalCopied - lastNotified >= 80 * 1024 * 1024 || totalCopied == totalBytes) {
+                                    lastNotified = totalCopied
+                                    val pct = (totalCopied.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f)
+                                    val mbCopied = totalCopied / (1024 * 1024)
+                                    val mbTotal = totalBytes / (1024 * 1024)
+                                    val subProg = 0.90f + (pct * 0.06f)
+                                    onProgressUpdate(
+                                        "Sauvegarde blocs ($mbCopied / $mbTotal Mo)...",
+                                        subProg,
+                                        "[COPIE BLOCS] $mbCopied / $mbTotal Mo transférés (${(pct * 100).toInt()}%)"
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    itemsExtracted++
+                    onProgressUpdate("Image partition enregistrée", 0.96f, "[OK] Image de partition intègre enregistrée : ${destImgFile.name} (${formatFileSize(destImgFile.length())})")
+                } catch (e: Exception) {
+                    onProgressUpdate("Erreur copie image", 0.94f, "[COPIE ERREUR] ${e.message}")
+                }
+            } else {
                 itemsExtracted++
-                onLog("[OK] Image de partition intègre enregistrée : ${destImgFile.name} (${formatFileSize(destImgFile.length())})")
-            } catch (e: Exception) {
-                onLog("[COPIE ERREUR] ${e.message}")
             }
         }
 
@@ -920,7 +1061,7 @@ object UkaEngine {
                 realProps.joinToString("\n")
             )
             itemsExtracted++
-            onLog("[EXTRACTION] build.prop réel extrait (${realProps.size} propriétés système détectées)")
+            onProgressUpdate("Propriétés système extraites", 0.98f, "[EXTRACTION] build.prop réel extrait (${realProps.size} propriétés système détectées)")
         }
 
         return itemsExtracted
@@ -1012,9 +1153,9 @@ object UkaEngine {
             } catch (_: Exception) {}
         } else if (effectiveFormat.contains("EXT4", ignoreCase = true)) {
             try {
-                val ext4Cmd = "make_ext4fs -l 3221225472 '${outputFile.absolutePath}' '${sourceTargetDir.absolutePath}'"
+                val ext4Cmd = "mke2fs -t ext4 -b 4096 '${outputFile.absolutePath}' 2>/dev/null || make_ext4fs -l 3221225472 '${outputFile.absolutePath}' '${sourceTargetDir.absolutePath}'"
                 val res = if (isRooted) {
-                    RootDelegator.executePrivilegedCommand(ext4Cmd) { line -> onLog("[make_ext4fs] $line") }
+                    RootDelegator.executePrivilegedCommand(ext4Cmd) { line -> onLog("[EXT4] $line") }
                 } else {
                     val p = Runtime.getRuntime().exec(arrayOf("sh", "-c", ext4Cmd))
                     p.waitFor()
@@ -1033,9 +1174,25 @@ object UkaEngine {
             }
             if (candidateImg != null) {
                 onLog("[REPACK] Reconstruction à partir des blocs de partition réels (${formatFileSize(candidateImg.length())})...")
-                FileInputStream(candidateImg).channel.use { src ->
-                    FileOutputStream(outputFile).channel.use { dst ->
-                        dst.transferFrom(src, 0, src.size())
+                val buf = ByteArray(4 * 1024 * 1024)
+                val totalBytes = candidateImg.length()
+                var totalCopied = 0L
+                var lastNotified = 0L
+                FileInputStream(candidateImg).use { src ->
+                    FileOutputStream(outputFile).use { dst ->
+                        while (true) {
+                            val r = src.read(buf)
+                            if (r == -1) break
+                            dst.write(buf, 0, r)
+                            totalCopied += r
+                            if (totalCopied - lastNotified >= 100 * 1024 * 1024 || totalCopied == totalBytes) {
+                                lastNotified = totalCopied
+                                val pct = (totalCopied.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f)
+                                val mbCopied = totalCopied / (1024 * 1024)
+                                val mbTotal = totalBytes / (1024 * 1024)
+                                onLog("[REPACK BLOCS] $mbCopied / $mbTotal Mo réassemblés (${(pct * 100).toInt()}%)")
+                            }
+                        }
                     }
                 }
             } else {

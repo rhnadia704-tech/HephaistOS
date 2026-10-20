@@ -5,8 +5,11 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -28,11 +31,9 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -41,13 +42,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.RailState
@@ -66,14 +67,14 @@ fun HephaistNavRail(
     val isExpanded = railState == RailState.EXPANDED
     val targetWidth = when (railState) {
         RailState.HIDDEN -> 0.dp
-        RailState.COMPACT -> 74.dp
-        RailState.EXPANDED -> 220.dp
+        RailState.COMPACT -> 72.dp
+        RailState.EXPANDED -> 232.dp
     }
 
     val railWidth by animateDpAsState(
         targetValue = targetWidth,
         animationSpec = spring(
-            dampingRatio = 0.82f,
+            dampingRatio = 0.85f,
             stiffness = Spring.StiffnessMediumLow
         ),
         label = "rail_width_anim"
@@ -87,18 +88,16 @@ fun HephaistNavRail(
             .fillMaxHeight()
             .clipToBounds(),
         color = MaterialTheme.colorScheme.surfaceContainer,
-        tonalElevation = 3.dp
+        tonalElevation = 2.dp,
+        shadowElevation = 4.dp
     ) {
-        val contentAlpha = ((railWidth - 15.dp) / 50.dp).coerceIn(0f, 1f)
-
         Column(
             modifier = Modifier
-                .width(if (isExpanded) 220.dp else 74.dp)
+                .fillMaxWidth()
                 .fillMaxHeight()
                 .statusBarsPadding()
                 .navigationBarsPadding()
-                .alpha(contentAlpha)
-                .padding(vertical = 12.dp, horizontal = 8.dp),
+                .padding(vertical = 14.dp, horizontal = 10.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.SpaceBetween
         ) {
@@ -112,15 +111,14 @@ fun HephaistNavRail(
                     horizontalArrangement = if (isExpanded) Arrangement.Start else Arrangement.Center,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 4.dp, vertical = 6.dp)
                         .clip(RoundedCornerShape(14.dp))
                         .clickable { onToggleExpand() }
-                        .padding(6.dp)
+                        .padding(vertical = 6.dp, horizontal = 4.dp)
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(42.dp)
-                            .clip(RoundedCornerShape(12.dp))
+                            .size(44.dp)
+                            .clip(RoundedCornerShape(13.dp))
                             .background(MaterialTheme.colorScheme.primaryContainer),
                         contentAlignment = Alignment.Center
                     ) {
@@ -132,25 +130,38 @@ fun HephaistNavRail(
                         )
                     }
 
-                    if (isExpanded) {
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column {
+                    AnimatedVisibility(
+                        visible = isExpanded,
+                        enter = expandHorizontally(
+                            animationSpec = spring(dampingRatio = 0.85f, stiffness = Spring.StiffnessMediumLow),
+                            expandFrom = Alignment.Start
+                        ) + fadeIn(animationSpec = tween(180, delayMillis = 60)),
+                        exit = shrinkHorizontally(
+                            animationSpec = spring(dampingRatio = 0.85f, stiffness = Spring.StiffnessMediumLow),
+                            shrinkTowards = Alignment.Start
+                        ) + fadeOut(animationSpec = tween(100))
+                    ) {
+                        Column(modifier = Modifier.padding(start = 12.dp)) {
                             Text(
                                 text = "HephaistOS",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                softWrap = false
                             )
                             Text(
-                                text = "v1.0 • Modulaire",
+                                text = "v1.0 • Moteur UKA",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.primary
+                                color = MaterialTheme.colorScheme.primary,
+                                maxLines = 1,
+                                softWrap = false
                             )
                         }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(18.dp))
+                Spacer(modifier = Modifier.height(20.dp))
 
                 // Navigation Items
                 NavRailItem(
@@ -197,7 +208,7 @@ fun HephaistNavRail(
                 )
             }
 
-            // Bottom spacer (arrow button removed as requested)
+            // Bottom spacer
             Spacer(modifier = Modifier.height(8.dp))
         }
     }
@@ -222,41 +233,50 @@ private fun NavRailItem(
         label = "nav_item_content"
     )
 
-    Box(
+    Surface(
+        onClick = onClick,
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .background(bgColor)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 10.dp)
             .testTag(testTag),
-        contentAlignment = if (isExpanded) Alignment.CenterStart else Alignment.Center
+        color = bgColor,
+        shape = RoundedCornerShape(16.dp)
     ) {
         Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Start
+            horizontalArrangement = if (isExpanded) Arrangement.Start else Arrangement.Center
         ) {
             Icon(
                 imageVector = if (selected) selectedIcon else unselectedIcon,
                 contentDescription = label,
                 tint = contentColor,
-                modifier = Modifier.size(26.dp)
+                modifier = Modifier.size(24.dp)
             )
 
             AnimatedVisibility(
                 visible = isExpanded,
-                enter = fadeIn(),
-                exit = fadeOut()
+                enter = expandHorizontally(
+                    animationSpec = spring(dampingRatio = 0.85f, stiffness = Spring.StiffnessMediumLow),
+                    expandFrom = Alignment.Start
+                ) + fadeIn(animationSpec = tween(180, delayMillis = 60)),
+                exit = shrinkHorizontally(
+                    animationSpec = spring(dampingRatio = 0.85f, stiffness = Spring.StiffnessMediumLow),
+                    shrinkTowards = Alignment.Start
+                ) + fadeOut(animationSpec = tween(100))
             ) {
-                Row {
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text(
-                        text = label,
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                        color = contentColor
-                    )
-                }
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold,
+                    color = contentColor,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Clip,
+                    modifier = Modifier.padding(start = 14.dp)
+                )
             }
         }
     }
@@ -277,41 +297,50 @@ private fun PlusActionButton(
         label = "plus_btn_content"
     )
 
-    Box(
+    Surface(
+        onClick = onClick,
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .background(bgColor)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 10.dp)
             .testTag("nav_plus_button"),
-        contentAlignment = if (isExpanded) Alignment.CenterStart else Alignment.Center
+        color = bgColor,
+        shape = RoundedCornerShape(16.dp)
     ) {
         Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Start
+            horizontalArrangement = if (isExpanded) Arrangement.Start else Arrangement.Center
         ) {
             Icon(
                 imageVector = Icons.Default.Add,
                 contentDescription = "Ajouter un module",
                 tint = contentColor,
-                modifier = Modifier.size(26.dp)
+                modifier = Modifier.size(24.dp)
             )
 
             AnimatedVisibility(
                 visible = isExpanded,
-                enter = fadeIn(),
-                exit = fadeOut()
+                enter = expandHorizontally(
+                    animationSpec = spring(dampingRatio = 0.85f, stiffness = Spring.StiffnessMediumLow),
+                    expandFrom = Alignment.Start
+                ) + fadeIn(animationSpec = tween(180, delayMillis = 60)),
+                exit = shrinkHorizontally(
+                    animationSpec = spring(dampingRatio = 0.85f, stiffness = Spring.StiffnessMediumLow),
+                    shrinkTowards = Alignment.Start
+                ) + fadeOut(animationSpec = tween(100))
             ) {
-                Row {
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text(
-                        text = "Ajouter (+)",
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = contentColor
-                    )
-                }
+                Text(
+                    text = "Ajouter (+)",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = contentColor,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Clip,
+                    modifier = Modifier.padding(start = 14.dp)
+                )
             }
         }
     }
