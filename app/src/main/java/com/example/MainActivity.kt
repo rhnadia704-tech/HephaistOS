@@ -68,6 +68,7 @@ import com.example.ui.components.BottomTerminalPanel
 import com.example.ui.components.HeavyTaskDialog
 import com.example.ui.components.HephaistNavRail
 import com.example.ui.components.PlusDrawer
+import com.example.ui.screens.ExtractorScreen
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.screens.TerminalScreen
@@ -184,6 +185,13 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+            // Auto-refresh unpacked projects list when switching to Extractor screen
+            LaunchedEffect(uiState.currentScreen) {
+                if (uiState.currentScreen == Screen.EXTRACTOR) {
+                    viewModel.refreshExtractorProjects(context)
+                }
+            }
+
             HephaistOSTheme(
                 themeMode = uiState.themeMode,
                 colorStyle = uiState.colorStyle
@@ -283,6 +291,9 @@ class MainActivity : ComponentActivity() {
                                                 onNavigateToUnpackRepack = {
                                                     viewModel.selectScreen(Screen.UNPACK_REPACK)
                                                 },
+                                                onNavigateToExtractor = {
+                                                    viewModel.selectScreen(Screen.EXTRACTOR)
+                                                },
                                                 onRefresh = {
                                                     viewModel.refreshCompatibleApps(context)
                                                 }
@@ -311,6 +322,28 @@ class MainActivity : ComponentActivity() {
                                                 },
                                                 onOpenFullTerminal = {
                                                     viewModel.openBottomTerminal()
+                                                },
+                                                onBackToHome = {
+                                                    viewModel.selectScreen(Screen.HOME)
+                                                }
+                                            )
+
+                                            Screen.EXTRACTOR -> ExtractorScreen(
+                                                extractorState = uiState.extractorUiState,
+                                                onStartDeviceExtraction = {
+                                                    viewModel.executeDeviceExtraction(context)
+                                                },
+                                                onStartUnpackedAnalysis = {
+                                                    viewModel.executeUnpackedAnalysis(context)
+                                                },
+                                                onRefreshUnpackedProjects = {
+                                                    viewModel.refreshExtractorProjects(context)
+                                                },
+                                                onSelectUnpackedProject = { project ->
+                                                    viewModel.selectExtractorProject(project)
+                                                },
+                                                onNavigateToUnpackRepack = {
+                                                    viewModel.selectScreen(Screen.UNPACK_REPACK)
                                                 },
                                                 onBackToHome = {
                                                     viewModel.selectScreen(Screen.HOME)

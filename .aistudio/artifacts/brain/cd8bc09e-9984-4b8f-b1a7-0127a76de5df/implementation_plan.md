@@ -1,82 +1,122 @@
-# Spécification Canonique et Guide d'Architecture des Applications Satellites HephaistOS (HSAS v1.0)
+# Module EXTRACTOR — Extraction Factuelle & Laboratoire de Portage GSI
 
-Ce plan d'implémentation structure l'écosystème modulaire d'HephaistOS pour garantir qu'aucune application satellite ne soit ignorée, que son interface soit immédiatement harmonisée avec l'hôte (thème sombre/clair et ADN visuel HephaistOS), et que les outils soient partagés et orchestrés de manière fluide via un protocole d'interopérabilité standardisé (AIDL & Services Android).
-
----
-
-## 1. Diagnostic de l'Existant & Causes Racine
-
-1. **Échec de Détection des Satellites Actuels** :
-   - `AddonRegistry.scanInstalledAddons()` n'interrogeait que `queryIntentActivities` avec le flag `0`, omettant les applications qui exposent uniquement des services, ou qui n'ont pas la catégorie `DEFAULT`, ou restreintes par le filtre de visibilité de paquets sur Android 11+ (API 30+).
-   - L'absence d'écouteur d'événements système (`BroadcastReceiver` pour `ACTION_PACKAGE_ADDED`, `ACTION_PACKAGE_REMOVED`, `ACTION_PACKAGE_REPLACED`) empêchait la mise à jour automatique de la liste lors de l'installation ou désinstallation d'un satellite sur le téléphone.
-2. **Divergence Visuelle de l'Interface** :
-   - Les anciens templates ne fournissaient pas les définitions de tokens visuels Jetpack Compose de HephaistOS (schéma de couleurs sombre/clair, formes, typographie technique, barres d'outils, structure de cartes). Un développeur ou une IA créait donc une interface générique non assortie.
-3. **Absence d'Interopérabilité Fonctionnelle Réelle** :
-   - Les modèles précédents proposaient un simple broadcast sans contrat d'interface formalisé. Les satellites ne pouvaient pas exécuter les commandes d'ingénierie de HephaistOS (UkaEngine, workspace, accès root délégué) ni offrir leurs propres fonctions à l'hôte.
-4. **Documentation GitHub & Starter Kit Incomplets** :
-   - Le dépôt ne comportait pas de `README.md` racine détaillant la spécification HSAS ni de bible canonique permettant à une IA (comme AI Studio sur un autre projet) de générer un satellite parfait en un seul prompt.
+Ce plan d'implémentation détaille la création du nouveau module **EXTRACTOR** directement intégré sur la page d'accueil et le rail de navigation d'HephaistOS, avec une interface identique à celle d'**Unpack / Repack**. Ce module est dédié à l'extraction exhaustive des composants de l'appareil (blobs vendor, interfaces HAL, framework, propriétés) et à l'analyse comparative des images déballées (GSI/ROM) pour préparer un portage sans faille.
 
 ---
 
-## 2. Architecture & Composants Cibles (HSAS v1.0)
+##  User Review & Critical Decisions
 
-### Phase 1 : Détection Automatique et Temps Réel des Satellites
-- **`PackageReceiver.kt`** : Création d'un récepteur d'événements système (`BroadcastReceiver`) écoutant `Intent.ACTION_PACKAGE_ADDED`, `Intent.ACTION_PACKAGE_REMOVED`, `Intent.ACTION_PACKAGE_REPLACED` avec le schéma de données `package`. Déclaré dans `AndroidManifest.xml` et enregistré dynamiquement dans l'activité pour un rafraîchissement réactif instantané du `HephaistViewModel`.
-- **Évolution de `AddonRegistry.kt`** :
-  - Détection multi-vecteurs : scanne les `Activity` et les `Service` déclarés avec l'action `org.hephaistos.action.SATELLITE` ou `org.hephaistos.action.ADDON`.
-  - Prise en charge des métadonnées de manifeste : `org.hephaistos.satellite.V1`, `org.hephaistos.addon.CAPABILITIES`, `org.hephaistos.satellite.ROLE`.
-  - Détection de l'état de synchronisation en direct (connecté, installé, version, capacités déclarées).
-
-### Phase 2 : Protocole d'Interopérabilité Hôte-Satellites (AIDL & Service Dédié)
-- **Contrat AIDL Standardisé (`IHephaistHostService.aidl`)** :
-  - `executeHostTool(String toolId, String jsonArgs)` : permet à un satellite d'invoquer les moteurs d'HephaistOS (déballage d'images, analyse payload, outils root, lecture des dossiers).
-  - `getWorkspacePaths()` : fournit les chemins certifiés (`/sdcard/HEPHAISTOS/UNPACKED/`, `PACKED/`, etc.).
-  - `logToHostTerminal(String tag, String message)` : permet au satellite d'écrire directement dans la console terminal d'HephaistOS.
-  - `getRegisteredSatellites()` : permet la découverte mutuelle entre satellites.
-- **Service Hôte `HephaistHostService.kt`** :
-  - Service bound exporté avec action `org.hephaistos.service.HOST_IPC`.
-  - Gestion sécurisée des connexions satellites, dispatch des commandes d'ingénierie, enregistrement des outils partagés dans `AddonRegistry`.
-
-### Phase 3 : Refonte Complète des Templates dans Paramètres (`SettingsScreen.kt`)
-- Remplacement des anciens aperçus par une interface pédagogique structurée en 4 volets interactifs :
-  1. **Déclaration Canonique (Manifest & ADN)** : XML prêt pour `AndroidManifest.xml`, intent-filters, meta-data des capacités et permissions.
-  2. **Charte Visuelle & Thème Jetpack Compose** : Code source complet des couleurs, formes et composants de base pour que le satellite arbore rigoureusement le même style (mode sombre/clair automatique, cartes profilées, polices monospace techniques).
-  3. **Code Client AIDL & Communication** : Exemple Kotlin clé en main pour se lier à `HephaistHostService` et exécuter une tâche en quelques lignes de code.
-  4. **Prompt Clé-en-Main pour IA & AI Studio** : Un bloc de prompt optimisé copiable en un clic, à coller dans AI Studio pour créer immédiatement un satellite autonome et conforme sans ambiguïté.
-
-### Phase 4 : Bible Canonique HSAS v1.0 & Déploiement GitHub / Starter Kit
-- **`README.md` à la racine** : Présentation du projet HephaistOS avec badge et lien d'accès direct vers le guide canonique HSAS.
-- **`docs/HSAS_SPECIFICATION.md`** : La bible complète d'architecture contenant le dictionnaire des capacités standards, la spécification d'interopérabilité IPC, les contrats d'interface, et les règles d'ergonomie visuelle.
-- **Mise à jour de `PdfExporterService.kt` & Starter Kit ZIP** :
-  - Génération d'un kit de démarrage `.zip` enrichi contenant :
-    - `README.md` complet et téléchargeable.
-    - Code source Compose d'un satellite complet (`MainActivity.kt`, `HephaistTheme.kt`, `IHephaistHostService.aidl`, `SatelliteService.kt`).
-    - `AndroidManifest.xml` pré-configuré.
-    - Guide prompt pour agents d'IA.
-  - Document PDF officiel HSAS v1.0 actualisé avec les schémas AIDL et la charte d'interopérabilité.
+> [!IMPORTANT]
+> Les réponses aux questions de cadrage ont confirmé :
+> - **Extraction Factuelle Totale** : Priorité absolue aux blobs vendor, interfaces HAL, framework, propriétés et dépendances croisées de l'appareil pour établir un socle factuel solide de portage.
+> - **Rapports Comparatifs Structurés** : Génération conjointe de fichiers JSON exploitables par machine et de synthèses Markdown claires dans `/sdcard/HEPHAISTOS/EXTRACT/Data/`.
 
 ---
 
-## 3. Fichiers Concernés & Modifications
+## 1. Overview & Core Concept
+
+- **Rôle du Module** : L'EXTRACTOR permet de cartographier avec une précision chirurgicale l'architecture interne du téléphone actuel (HALs actifs, VINTF, blobs binaires, compatibilité Treble/VNDK, overlays framework) et de confronter ces données à n'importe quel GSI ou partition extraite dans `UNPACKED/`.
+- **Bénéfice Clé** : Fournit une base de données factuelle et un guide de portage automatisé qui indique exactement quels blobs et configurations du téléphone doivent être injectés dans le GSI pour qu'il démarre et fonctionne parfaitement.
+
+---
+
+## 2. User Experience & Visual Design
+
+### Emplacement & Navigation
+- **Page d'Accueil (`HomeScreen.kt`)** : Ajout d'une carte rapide `ExtractorQuickCard` sous `UnpackRepackQuickCard`, arborant le même style soigné (titre distinctif, badge de statut, bouton d'ouverture rapide).
+- **Rail de Navigation (`HephaistNavRail.kt`)** : Entrée dédiée `Screen.EXTRACTOR` ("Extractor") avec icône expressive `Icons.Default.Build` / `Memory`.
+
+### Interface Principale (`ExtractorScreen.kt`)
+Conçue selon les standards stricts de l'interface `UnpackRepackScreen` :
+1. **En-tête Profilé** : Bouton retour, titre "Extracteur & Porting Lab", badge de statut dynamique (Mode Root / Mode Utilisateur).
+2. **Carte d'Extraction de l'Appareil Actuel ("EXTRACT")** :
+   - Bouton d'action principal `EXTRACT PHONE ASSETS`.
+   - Résumé des cibles : Blobs Vendor, HALs VINTF (HIDL/AIDL), Framework & Overlays, Propriétés Système (`getprop`), Table SELinux.
+   - Options de filtrage : niveau de désassemblage (analyse des dépendances `.so`, décodage des manifests XML).
+3. **Carte d'Analyse Comparative du GSI / Image Unpackée ("ANALYSE UNPACKED")** :
+   - **Menu Déroulant (`ExposedDropdownMenuBox`)** : Liste dynamique en temps réel des projets et partitions disponibles dans `/sdcard/HEPHAISTOS/UNPACKED/`.
+   - Bouton d'analyse `ANALYSE UNPACKED`.
+   - Inspection croisée : Détection des attentes du GSI vs ce que le téléphone fournit (versions de HALs, blobs manquants, patchs Treble requis).
+4. **Console d'Exécution & Progression Temps Réel** :
+   - Barre de progression animée avec sous-compteur d'éléments et mégaoctets extraits.
+   - Terminal auto-défilant avec coloration syntaxique des opérations d'extraction.
+   - Liens directs pour ouvrir les rapports générés dans le visualiseur de fichiers ou l'explorateur.
+
+---
+
+## 3. Architecture Technique & Moteur d'Ingénierie (`ExtractorEngine.kt`)
+
+```text
+┌────────────────────────────────────────────────────────────────────────┐
+│                        MODULE EXTRACTOR HEPHAISTOS                     │
+├──────────────────────────────────┬─────────────────────────────────────┤
+│      BOUTON 1 : "EXTRACT"        │      BOUTON 2 : "ANALYSE UNPACKED"  │
+│  Extraction du Téléphone Actuel  │   Inspection du GSI sélectionné     │
+└─────────────────┬────────────────┴──────────────────┬──────────────────┘
+                  │                                   │
+                  ▼                                   ▼
+┌──────────────────────────────────┐┌────────────────────────────────────┐
+│ • Inspection VINTF (manifest.xml)││ • Scan /sdcard/HEPHAISTOS/UNPACKED │
+│ • Dump getprop & build.prop      ││ • Analyse build.prop du GSI        │
+│ • Blobs vendor (/vendor/lib*,etc)││ • Détection des HALs du GSI        │
+│ • Parsing ELF (.so NEEDED)       ││ • Confrontation Device vs GSI      │
+│ • Overlays & Framework XML       ││ • Identification des patchs Treble │
+└─────────────────┬────────────────┘└─────────────────┬──────────────────┘
+                  │                                   │
+                  ▼                                   ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│            DOSSIER DE DESTINATION : /sdcard/HEPHAISTOS/EXTRACT/        │
+│                                                                        │
+│   ├── device/          (Blobs réels, HALs, XMLs, libs du téléphone)    │
+│   ├── gsi_analysis/    (Architecture détaillée du GSI analysé)        │
+│   └── Data/            (Base de données factuelle pour le portage)     │
+│       ├── device_specifications.json                                  │
+│       ├── hal_dependency_graph.json                                   │
+│       ├── blob_manifest.txt                                           │
+│       ├── gsi_vs_device_compatibility.json                            │
+│       └── porting_guide_generated.md                                  │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+### Détail des Fonctions du Moteur :
+1. **Extraction de l'Appareil (`extractDeviceAssets`)** :
+   - Extrait les manifestes VINTF de l'appareil (`/vendor/etc/vintf/manifest.xml`, `/system/etc/vintf/`).
+   - Collecte les propriétés matérielles complètes (`ro.board.platform`, `ro.product.vendor.device`, `ro.vndk.version`, `ro.treble.enabled`).
+   - Copie les HALs et blobs cruciaux (`/vendor/bin/hw/*`, `/vendor/lib/hw/*`, `/vendor/lib64/hw/*`).
+   - Parse les en-têtes ELF binaires pour extraire les bibliothèques partagées indispensables (`readelf -d` ou analyseur d'en-tête ELF Java).
+   - Stocke l'ensemble dans `/sdcard/HEPHAISTOS/EXTRACT/device/`.
+
+2. **Génération de la Base de Données (`EXTRACT/Data/`)** :
+   - `device_specifications.json` : Profil matériel factuel (architecture CPU, version VNDK, niveau d'API, surface d'attaque SELinux).
+   - `hal_dependency_graph.json` : Graphe des services HAL avec leurs bibliothèques requises.
+   - `blob_manifest.txt` : Liste exhaustive formatée pour créer un device tree AOSP/LineageOS.
+
+3. **Analyse de l'Image Unpackée (`analyseUnpackedImage`)** :
+   - Charge le projet choisi dans `/sdcard/HEPHAISTOS/UNPACKED/<projet>/`.
+   - Analyse ses fichiers système (`system/build.prop`, `/system/etc/vintf/`, services init).
+   - Calcule la matrice de compatibilité croisée Device <-> GSI.
+   - Produit `porting_guide_generated.md` contenant les recommandations concrètes de portage (ex : "Injecter libcamera.provider.so", "Remplacer l'overlay brightness", "Désactiver AVB verification").
+
+---
+
+## 4. Fichiers Concernés & Modifications
 
 | Fichier | Modification |
 |---|---|
-| `app/src/main/AndroidManifest.xml` | Déclaration des actions de requêtes `<queries>`, permission de lecture de paquets, et déclaration du récepteur de paquets et de `HephaistHostService`. |
-| `app/src/main/aidl/org/hephaistos/ipc/IHephaistHostService.aidl` | Définition de l'interface AIDL d'interopérabilité hôte-satellites. |
-| `app/src/main/java/com/example/data/HephaistHostService.kt` | Implémentation du service hôte Android pour le partage des outils et l'exécution distante. |
-| `app/src/main/java/com/example/data/AddonRegistry.kt` | Enrichissement du moteur de découverte automatique (Activités + Services + Meta-data) et gestion du registre des outils. |
-| `app/src/main/java/com/example/data/PackageReceiver.kt` | BroadcastReceiver écoutant l'installation et la désinstallation de packages en temps réel. |
-| `app/src/main/java/com/example/ui/HephaistViewModel.kt` | Enregistrement du récepteur de paquets et déclenchement réactif de `refreshCompatibleApps()`. |
-| `app/src/main/java/com/example/ui/screens/SettingsScreen.kt` | Refonte intégrale de l'onglet Modèles avec la documentation HSAS v1.0, les blocs de code Compose, AIDL et le prompt IA. |
-| `app/src/main/java/com/example/data/PdfExporterService.kt` | Génération du nouveau ZIP Starter Kit complet avec l'arborescence projet Android et la documentation HSAS v1.0. |
-| `README.md` | Page d'accueil GitHub avec lien vers la spécification HSAS. |
-| `docs/HSAS_SPECIFICATION.md` | Bible architecturale canonique complète et exhaustive pour développeurs et intelligences artificielles. |
+| `app/src/main/java/com/example/model/Models.kt` | Ajout de `Screen.EXTRACTOR` dans l'énumération des écrans. |
+| `app/src/main/java/com/example/data/WorkspaceManager.kt` | Création et initialisation des répertoires `EXTRACT`, `EXTRACT/device`, `EXTRACT/gsi_analysis` et `EXTRACT/Data`. |
+| `app/src/main/java/com/example/data/ExtractorEngine.kt` | Nouveau moteur d'extraction factuelle du téléphone, parsing ELF/XML, et analyseur de compatibilité GSI. |
+| `app/src/main/java/com/example/ui/HephaistViewModel.kt` | Gestion de l'état d'extraction, sélection de projet unpacké, progression temps réel et exécution des commandes. |
+| `app/src/main/java/com/example/ui/screens/ExtractorScreen.kt` | Nouvel écran Compose avec interface calquée sur `UnpackRepackScreen` (boutons EXTRACT, sélecteur UNPACKED, ANALYSE, terminal interactif). |
+| `app/src/main/java/com/example/ui/screens/HomeScreen.kt` | Ajout de la carte rapide `ExtractorQuickCard` et navigation vers l'écran Extractor. |
+| `app/src/main/java/com/example/ui/components/HephaistNavRail.kt` | Ajout de l'item Extractor dans le rail de navigation. |
+| `app/src/main/java/com/example/MainActivity.kt` | Intégration de la transition vers `ExtractorScreen` dans le routeur principal. |
 
 ---
 
-## 4. Vérification & Validation
+## 5. Vérification & Validation
 
-1. **Compilation Android** : Exécution de `compile_applet` pour valider l'absence d'erreurs de syntaxe, la conformité AIDL / Service et la cohérence de l'arbre Compose.
-2. **Cycle de Vie Paquet** : Vérification de la détection dynamique d'un nouveau satellite sans redémarrage de l'application hôte.
-3. **Génération & Export** : Contrôle de la création du Starter Kit ZIP et de la présence des fichiers `README.md`, `HSAS_SPECIFICATION.md` et modèles Kotlin/Compose.
-4. **Fidélité Visuelle & UX** : Validation de la cohérence de l'interface dans l'onglet Paramètres avec le thème et le rail de navigation de l'hôte.
+1. **Compilation** : Exécution de `compile_applet` pour valider l'absence d'erreurs de syntaxe et la cohérence de l'arbre Compose.
+2. **Navigation** : Validation du passage fluide Accueil ↔ Extractor via le rail latéral et la carte d'accueil.
+3. **Menu Déroulant** : Vérification du listage réactif des dossiers présents dans `/sdcard/HEPHAISTOS/UNPACKED/`.
+4. **Structure des Données** : Contrôle de la création de `/sdcard/HEPHAISTOS/EXTRACT/Data/` et de la génération des rapports JSON et Markdown.

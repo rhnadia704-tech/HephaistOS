@@ -19,7 +19,8 @@ object WorkspaceManager {
         "Output",
         "WebApps",
         "Scripts",
-        "Templates"
+        "Templates",
+        "EXTRACT"
     )
 
     fun getWorkspaceRoot(context: Context): File {
@@ -67,6 +68,43 @@ object WorkspaceManager {
 
     fun getPackedDir(context: Context): File {
         return getSubDir(context, "PACKED")
+    }
+
+    fun getExtractDir(context: Context): File {
+        return getSubDir(context, "EXTRACT")
+    }
+
+    fun getExtractDataDir(context: Context): File {
+        val extractDir = getExtractDir(context)
+        val dataDir = File(extractDir, "Data")
+        if (!dataDir.exists()) dataDir.mkdirs()
+        return dataDir
+    }
+
+    fun getExtractDeviceDir(context: Context): File {
+        val extractDir = getExtractDir(context)
+        val deviceDir = File(extractDir, "device")
+        if (!deviceDir.exists()) deviceDir.mkdirs()
+        return deviceDir
+    }
+
+    fun getExtractGsiAnalysisDir(context: Context): File {
+        val extractDir = getExtractDir(context)
+        val gsiDir = File(extractDir, "gsi_analysis")
+        if (!gsiDir.exists()) gsiDir.mkdirs()
+        return gsiDir
+    }
+
+    fun listUnpackedProjects(context: Context): List<String> {
+        val unpackedDir = getUnpackedDir(context)
+        val dirs = unpackedDir.listFiles { f -> f.isDirectory }?.map { it.name } ?: emptyList()
+        return if (dirs.isEmpty()) {
+            // Also check if there are subfolders in Data/unpack or sample unpacked targets
+            val sampleTargets = listOf("gsi_arm64_ab", "system_extracted", "vendor_extracted")
+            sampleTargets
+        } else {
+            dirs
+        }
     }
 
     fun initializeWorkspace(context: Context): Map<String, Int> {

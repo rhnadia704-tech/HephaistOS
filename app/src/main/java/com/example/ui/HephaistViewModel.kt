@@ -30,7 +30,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.example.data.ExtractorEngine
 import com.example.data.UkaEngine
+import com.example.model.ExtractionMode
+import com.example.model.ExtractorUiState
 import com.example.model.RepackUiState
 import com.example.model.UnpackUiState
 import java.io.File
@@ -66,6 +69,7 @@ data class HephaistUiState(
     val workspaceStats: Map<String, Int> = emptyMap(),
     val unpackUiState: UnpackUiState = UnpackUiState(),
     val repackUiState: RepackUiState = RepackUiState(),
+    val extractorUiState: ExtractorUiState = ExtractorUiState(),
     val snackbarMessage: String? = null
 )
 
@@ -876,6 +880,164 @@ class HephaistViewModel(application: Application) : AndroidViewModel(application
 
     fun showSnackbar(message: String) {
         _uiState.update { it.copy(snackbarMessage = message) }
+    }
+
+    fun refreshExtractorProjects(context: Context) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val projects = WorkspaceManager.listUnpackedProjects(context)
+            withContext(Dispatchers.Main) {
+                _uiState.update { state ->
+                    val currentSelected = state.extractorUiState.selectedUnpackedProject
+                    val selected = if (currentSelected.isNotEmpty() && projects.contains(currentSelected)) {
+                        currentSelected
+                    } else {
+                        projects.firstOrNull() ?: ""
+                    }
+                    state.copy(
+                        extractorUiState = state.extractorUiState.copy(
+                            availableUnpackedProjects = projects,
+                            selectedUnpackedProject = selected
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    fun selectExtractorProject(projectName: String) {
+        _uiState.update {
+            it.copy(
+                extractorUiState = it.extractorUiState.copy(
+                    selectedUnpackedProject = projectName
+                )
+            )
+        }
+    }
+
+    fun executeDeviceExtraction(context: Context) {
+        if (_uiState.value.extractorUiState.isExecuting) return
+
+        _uiState.update {
+            it.copy(
+                extractorUiState = it.extractorUiState.copy(
+                    isExecuting = true,
+                    currentMode = ExtractionMode.FULL_DEVICE,
+                    progress = 0.05f,
+                    currentStepText = "Initialisation de l'extraction matérielle...",
+                    logs = listOf(TerminalEntry("[EXTRACTEUR] Démarrage de l'analyse intégrale de l'appareil..."))
+                )
+            )
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = ExtractorEngine.extractCurrentDevice(
+                context = context,
+                onProgress = { step, percent, count, mb ->
+                    _uiState.update {
+                        it.copy(
+                            extractorUiState = it.extractorUiState.copy(
+                                currentStepText = step,
+                                progress = percent,
+                                extractedFilesCount = count,
+                                extractedMb = mb
+                            )
+                        )
+                    }
+                },
+                onLog = { logLine ->
+                    val isSuccess = logLine.contains("[SUCCÈS]") || logLine.contains("[INFO]")
+                    val isError = logLine.contains("[ERREUR]")
+                    _uiState.update {
+                        it.copy(
+                            extractorUiState = it.extractorUiState.copy(
+                                logs = (it.extractorUiState.logs + TerminalEntry(logLine, isError = isError, isSuccess = isSuccess)).takeLast(250)
+                            )
+                        )
+                    }
+                }
+            )
+
+            withContext(Dispatchers.Main) {
+                _uiState.update {
+                    it.copy(
+                        extractorUiState = it.extractorUiState.copy(
+                            isExecuting = false,
+                            progress = if (result.isSuccess) 1.0f else it.extractorUiState.progress,
+                            currentStepText = if (result.isSuccess) "Extraction et base de données factuelle générées avec succès !" else "Erreur pendant l'extraction",
+                            lastGeneratedReportPath = result.reportFile?.absolutePath,
+                            lastGeneratedDataDir = result.dataDir?.absolutePath
+                        )
+                    )
+                }
+                showSnackbar(result.summary)
+            }
+        }
+    }
+
+    fun executeUnpackedAnalysis(context: Context) {
+        val selectedProject = _uiState.value.extractorUiState.selectedUnpackedProject
+        if (selectedProject.isBlank()) {
+            showSnackbar("Veuillez sélectionner un projet déballé dans UNPACKED.")
+            return
+        }
+        if (_uiState.value.extractorUiState.isExecuting) return
+
+        _uiState.update {
+            it.copy(
+                extractorUiState = it.extractorUiState.copy(
+                    isExecuting = true,
+                    currentMode = ExtractionMode.UNPACKED_ANALYSIS,
+                    progress = 0.05f,
+                    currentStepText = "Analyse du projet $selectedProject...",
+                    logs = listOf(TerminalEntry("[ANALYSEUR GSI] Démarrage de l'inspection de $selectedProject..."))
+                )
+            )
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = ExtractorEngine.analyseUnpackedProject(
+                context = context,
+                projectName = selectedProject,
+                onProgress = { step, percent, count, mb ->
+                    _uiState.update {
+                        it.copy(
+                            extractorUiState = it.extractorUiState.copy(
+                                currentStepText = step,
+                                progress = percent,
+                                extractedFilesCount = count,
+                                extractedMb = mb
+                            )
+                        )
+                    }
+                },
+                onLog = { logLine ->
+                    val isSuccess = logLine.contains("[SUCCÈS]") || logLine.contains("[INFO]")
+                    val isError = logLine.contains("[ERREUR]")
+                    _uiState.update {
+                        it.copy(
+                            extractorUiState = it.extractorUiState.copy(
+                                logs = (it.extractorUiState.logs + TerminalEntry(logLine, isError = isError, isSuccess = isSuccess)).takeLast(250)
+                            )
+                        )
+                    }
+                }
+            )
+
+            withContext(Dispatchers.Main) {
+                _uiState.update {
+                    it.copy(
+                        extractorUiState = it.extractorUiState.copy(
+                            isExecuting = false,
+                            progress = if (result.isSuccess) 1.0f else it.extractorUiState.progress,
+                            currentStepText = if (result.isSuccess) "Rapport et matrice de compatibilité générés !" else "Erreur pendant l'analyse",
+                            lastGeneratedReportPath = result.reportFile?.absolutePath,
+                            lastGeneratedDataDir = result.dataDir?.absolutePath
+                        )
+                    )
+                }
+                showSnackbar(result.summary)
+            }
+        }
     }
 
     fun dismissSnackbar() {

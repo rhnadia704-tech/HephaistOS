@@ -1,6 +1,6 @@
 {
-  "summary":  "Plan d'implémentation de la Spécification Canonique et Guide d'Architecture des Applications Satellites HephaistOS (HSAS v1.0).\nCe plan détaille la détection automatique temps réel des satellites (installation/désinstallation), le protocole d'interopérabilité hôte-satellites (AIDL/Bound Service), la refonte complète des modèles de code dans Paramètres, l'intégration de la bible architecturale compréhensible par toute IA ou développeur, et la mise à disposition de la documentation pour GitHub et du Starter Kit téléchargeable.",
-  "updatedAt":  "2026-10-21T07:15:47.166561870Z",
+  "summary":  "Plan d'implémentation du nouveau module EXTRACTOR pour HephaistOS.\nCe module propose une interface identique à Unpack/Repack, avec un moteur d'extraction factuelle du téléphone actuel (blobs, HALs, framework, désassemblage des dépendances .so et XML) vers /sdcard/HEPHAISTOS/EXTRACT/, une base de connaissances dans EXTRACT/Data/, une sélection déroulante des projets dans UNPACKED, et un moteur d'analyse comparative approfondie des GSI/ROMs déballées pour le portage.",
+  "updatedAt":  "2026-10-21T18:16:20.439516019Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

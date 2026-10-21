@@ -3,6 +3,7 @@ package com.example.model
 enum class Screen(val title: String) {
     HOME("Accueil"),
     UNPACK_REPACK("Unpack / Repack"),
+    EXTRACTOR("Extractor"),
     SETTINGS("Paramètres")
 }
 
@@ -119,5 +120,24 @@ data class TerminalEntry(
 data class HeavyTaskDialogData(
     val app: CompatibleApp,
     val taskName: String
+)
+
+enum class ExtractionMode(val title: String, val description: String) {
+    FULL_DEVICE("Appareil Actuel", "Blobs, HALs, Framework & Base de données factuelle"),
+    UNPACKED_ANALYSIS("Analyse GSI / ROM", "Analyse croisée d'un projet déballé dans UNPACKED")
+}
+
+data class ExtractorUiState(
+    val isExecuting: Boolean = false,
+    val currentMode: ExtractionMode = ExtractionMode.FULL_DEVICE,
+    val selectedUnpackedProject: String = "",
+    val availableUnpackedProjects: List<String> = emptyList(),
+    val progress: Float = 0f,
+    val currentStepText: String = "Prêt pour l'extraction",
+    val extractedFilesCount: Int = 0,
+    val extractedMb: Double = 0.0,
+    val logs: List<TerminalEntry> = emptyList(),
+    val lastGeneratedReportPath: String? = null,
+    val lastGeneratedDataDir: String? = null
 )
 

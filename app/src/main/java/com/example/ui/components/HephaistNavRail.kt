@@ -28,9 +28,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.Settings
@@ -184,6 +186,18 @@ fun HephaistNavRail(
                     isExpanded = isExpanded,
                     testTag = "nav_unpack_repack_button",
                     onClick = { onScreenSelected(Screen.UNPACK_REPACK) }
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                NavRailItem(
+                    label = "Extractor",
+                    selected = currentScreen == Screen.EXTRACTOR && !isPlusDrawerOpen,
+                    selectedIcon = Icons.Filled.Build,
+                    unselectedIcon = Icons.Outlined.Build,
+                    isExpanded = isExpanded,
+                    testTag = "nav_extractor_button",
+                    onClick = { onScreenSelected(Screen.EXTRACTOR) }
                 )
 
                 Spacer(modifier = Modifier.height(8.dp))
