@@ -117,6 +117,15 @@ class MainActivity : ComponentActivity() {
             registerReceiver(packageChangeReceiver, packageFilter)
         }
 
+        // Connect IPC host service log listener and PackageReceiver static event
+        com.example.data.HephaistHostService.addTerminalLogListener { sender, msg ->
+            viewModel.logTerminal("[$sender] $msg")
+        }
+        com.example.data.PackageReceiver.addListener { pkg, action ->
+            viewModel.logTerminal("[ÉCOSYSTÈME] Événement détecté sur paquet $pkg ($action)")
+            viewModel.refreshCompatibleApps(this@MainActivity)
+        }
+
         setContent {
             val uiState by viewModel.uiState.collectAsStateWithLifecycle()
             val context = LocalContext.current

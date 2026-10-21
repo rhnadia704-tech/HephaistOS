@@ -1,127 +1,82 @@
-# Progression Temps Réel Unpack & Rail de Navigation Moderne
+# Spécification Canonique et Guide d'Architecture des Applications Satellites HephaistOS (HSAS v1.0)
 
-Plan d'implémentation pour résoudre le blocage perçu à 25% lors du montage/déballage d'images volumineuses (GSI/ROM) dans le moteur UKA, introduire un suivi continu des Mo transférés et du nombre de fichiers avec défilement automatique du terminal, et refondre l'animation et l'ergonomie du rail de navigation latéral pour une expérience fluide, attrayante et professionnelle.
-
-## Examen Utilisateur & Décisions Validées
-
-> [!IMPORTANT]
-> Suite à vos retours sur le succès du repack (qui a démarré avec succès sur DSU Sideloader !) et vos réponses aux clarifications :
-> 1. **Progression Continue & Terminal en Direct (Choix 1 & 3 validés) :**
->    - **Cause racine du blocage à 25% :** La copie précédente exécutait une commande silencieuse `cp -a` sur les dossiers racines du système (notamment `/system` contenant plus de 3 Go et des dizaines de milliers de fichiers). Durant les 2 à 3 minutes nécessaires au transfert physique sur la mémoire flash, aucun log n'était émis et la jauge restait figée à 25% avant de basculer d'un coup à 100%.
->    - **Résolution :** Pipeline de streaming continu avec `tar -v` et sonde de débit disque en tâche de fond. Progression continue calculée en Mo réels décompressés (`X / Y Mo`), décompte précis des fichiers déballés, pulsation active d'activité (« heartbeat ») empêchant tout sentiment de gel, et défilement automatique du terminal pour suivre l'extraction ligne par ligne.
->    - **Sauvegarde des Blocs Intègres :** Remplacement de l'appel bloquant unique par un flux tamponné de 4 Mo avec progression graduelle de 88% à 96%, affichant le volume en mégaoctets en temps réel.
-> 2. **Refonte du Rail de Navigation Latéral (Choix 1 validé) :**
->    - **Analyse des captures d'écran :** Les lettres des libellés (« Accueil », « Paramètres ») se retrouvaient compressées verticalement les unes sous les autres parce que le conteneur interne ne s'étendait pas de manière synchronisée avec la largeur animée, et que le texte n'était pas contraint sur une seule ligne (`maxLines = 1, softWrap = false`).
->    - **Résolution :** Transition fluide basée sur une animation ressort (`spring`), conteneur adaptatif avec libellés horizontaux sans coupure, puce active lumineuse (pill badge M3), espacement respirant et ombre douce pour un rendu premium.
+Ce plan d'implémentation structure l'écosystème modulaire d'HephaistOS pour garantir qu'aucune application satellite ne soit ignorée, que son interface soit immédiatement harmonisée avec l'hôte (thème sombre/clair et ADN visuel HephaistOS), et que les outils soient partagés et orchestrés de manière fluide via un protocole d'interopérabilité standardisé (AIDL & Services Android).
 
 ---
 
-## 1. Vue d'Ensemble & Concept Clé
+## 1. Diagnostic de l'Existant & Causes Racine
 
-* **Élimination Totale des Gels d'Interface :** Pendant la copie de partitions de 3 Go ou plus, l'utilisateur bénéficie d'une visibilité absolue : barre de progression animée qui avance de façon régulière (25% -> 30% -> 45% -> 60% -> 75% -> 90%), affichage du dossier ou fichier actuellement écrit, compteur de mégaoctets et pulsations d'activité toutes les secondes.
-* **Console Terminal Réactive avec Auto-Scroll :** Le composant terminal intégré et le mode console plein écran défilent automatiquement vers la ligne la plus récente pour refléter le déballage en direct.
-* **Navigation Latérale Haut de Gamme :** Remplacement du rail étriqué par un rail ergonomique à deux états (compact 72dp avec icônes centrées / étendu 230dp avec libellés horizontaux nets, sous-titres et icônes alignées), animé par une physique de ressort naturelle.
-
----
-
-## 2. Expérience Utilisateur & Design Visuel
-
-### A. Nouveau Rail de Navigation Latéral
-* **État Compact (72 dp) :** 
-  - Icônes Material Symbols centrées avec puces douces au survol ou à la sélection.
-  - Logo « H » identitaire HephaistOS élégamment encapsulé dans un conteneur arrondi.
-  - Bouton d'action rapide `(+)` avec contraste distinct.
-* **État Étendu (230 dp) :**
-  - Expansion horizontale fluide synchronisée (`animateDpAsState` avec amortissement `Spring.DampingRatioMediumBouncy`).
-  - Libellés textuels horizontaux impeccables (`Accueil`, `Unpack & Repack`, `Paramètres`, `Ajouter un module (+)`) avec `maxLines = 1` et fondu entrant doux (`fadeIn + expandHorizontally`).
-  - Ombre subtile (`tonalElevation = 2.dp` + bordure fine translucide) isolant élégamment le rail du contenu principal.
-
-### B. Progression Visuelle Pendant l'Unpack
-* **Indicateur de Progression Animé :** Progression continue adoucie par `animateFloatAsState`, évitant tout saut brusque.
-* **Compteur Dynamique en Sous-Titre :** 
-  - Exemple : `Déballage partition : 1 420 / 3 350 Mo (3 812 fichiers déballés)`
-* **Fenêtre Terminal Embarquée :**
-  - Défilement automatique au fur et à mesure que les fichiers sont découverts et extraits.
-  - Coloration syntaxique claire : vert pour les réussites et volumes, bleu pour les fichiers en cours, orange pour les étapes de montage loop.
+1. **Échec de Détection des Satellites Actuels** :
+   - `AddonRegistry.scanInstalledAddons()` n'interrogeait que `queryIntentActivities` avec le flag `0`, omettant les applications qui exposent uniquement des services, ou qui n'ont pas la catégorie `DEFAULT`, ou restreintes par le filtre de visibilité de paquets sur Android 11+ (API 30+).
+   - L'absence d'écouteur d'événements système (`BroadcastReceiver` pour `ACTION_PACKAGE_ADDED`, `ACTION_PACKAGE_REMOVED`, `ACTION_PACKAGE_REPLACED`) empêchait la mise à jour automatique de la liste lors de l'installation ou désinstallation d'un satellite sur le téléphone.
+2. **Divergence Visuelle de l'Interface** :
+   - Les anciens templates ne fournissaient pas les définitions de tokens visuels Jetpack Compose de HephaistOS (schéma de couleurs sombre/clair, formes, typographie technique, barres d'outils, structure de cartes). Un développeur ou une IA créait donc une interface générique non assortie.
+3. **Absence d'Interopérabilité Fonctionnelle Réelle** :
+   - Les modèles précédents proposaient un simple broadcast sans contrat d'interface formalisé. Les satellites ne pouvaient pas exécuter les commandes d'ingénierie de HephaistOS (UkaEngine, workspace, accès root délégué) ni offrir leurs propres fonctions à l'hôte.
+4. **Documentation GitHub & Starter Kit Incomplets** :
+   - Le dépôt ne comportait pas de `README.md` racine détaillant la spécification HSAS ni de bible canonique permettant à une IA (comme AI Studio sur un autre projet) de générer un satellite parfait en un seul prompt.
 
 ---
 
-## 3. Décisions Clés de Conception & Arbitrages
+## 2. Architecture & Composants Cibles (HSAS v1.0)
 
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│                        ANCIENNE vs NOUVELLE APPROCHE                   │
-├────────────────────────────────────────────────────────────────────────┤
-│  ANCIENNE :                                                            │
-│   cp -a /mnt/system /dest/  ──────>  Silence de 3 minutes              │
-│                                       (Jauge bloquée à 25%)            │
-│                                                                        │
-│  NOUVELLE (Moteur UKA Stream) :                                        │
-│   ├── (cd /mnt && tar -cf - .) | (cd /dest && tar -vxf -)              │
-│   │    └── Émission en direct de chaque fichier extrait                │
-│   ├── Sonde disque périodique (du -sm)                                 │
-│   │    └── Envoi régulier des Mo écrits (ex: 850 Mo, 1 420 Mo)        │
-│   └── Heartbeat Coroutine Kotlin                                       │
-│        └── Pulsation active si une opération d'E/S dépasse 1 seconde   │
-│        └── Rendu fluide : 25% ──> 38% ──> 52% ──> 74% ──> 90% ──> 100% │
-└────────────────────────────────────────────────────────────────────────┘
-```
+### Phase 1 : Détection Automatique et Temps Réel des Satellites
+- **`PackageReceiver.kt`** : Création d'un récepteur d'événements système (`BroadcastReceiver`) écoutant `Intent.ACTION_PACKAGE_ADDED`, `Intent.ACTION_PACKAGE_REMOVED`, `Intent.ACTION_PACKAGE_REPLACED` avec le schéma de données `package`. Déclaré dans `AndroidManifest.xml` et enregistré dynamiquement dans l'activité pour un rafraîchissement réactif instantané du `HephaistViewModel`.
+- **Évolution de `AddonRegistry.kt`** :
+  - Détection multi-vecteurs : scanne les `Activity` et les `Service` déclarés avec l'action `org.hephaistos.action.SATELLITE` ou `org.hephaistos.action.ADDON`.
+  - Prise en charge des métadonnées de manifeste : `org.hephaistos.satellite.V1`, `org.hephaistos.addon.CAPABILITIES`, `org.hephaistos.satellite.ROLE`.
+  - Détection de l'état de synchronisation en direct (connecté, installé, version, capacités déclarées).
 
-* **Pourquoi le streaming `tar` plutôt que `cp -a` ?**
-  - `tar -cf - . | tar -vxf -` préserve à 100% la structure UNIX (symlinks, permissions SELinux, horodatages) tout en écrivant le nom de chaque fichier traité dans le canal de sortie.
-  - Le streaming séquentiel réduit la fragmentation et s'avère jusqu'à 2 à 3 fois plus rapide que les copies récursives standard sur le stockage flash Android.
-* **Pourquoi une sonde disque en tâche de fond ?**
-  - Même si un très gros fichier binaire unique (comme un fichier `system.img` ou un conteneur Apex de 800 Mo) met quelques secondes à s'écrire, la sonde disque rapporte en continu les Mo progressant sur le stockage.
+### Phase 2 : Protocole d'Interopérabilité Hôte-Satellites (AIDL & Service Dédié)
+- **Contrat AIDL Standardisé (`IHephaistHostService.aidl`)** :
+  - `executeHostTool(String toolId, String jsonArgs)` : permet à un satellite d'invoquer les moteurs d'HephaistOS (déballage d'images, analyse payload, outils root, lecture des dossiers).
+  - `getWorkspacePaths()` : fournit les chemins certifiés (`/sdcard/HEPHAISTOS/UNPACKED/`, `PACKED/`, etc.).
+  - `logToHostTerminal(String tag, String message)` : permet au satellite d'écrire directement dans la console terminal d'HephaistOS.
+  - `getRegisteredSatellites()` : permet la découverte mutuelle entre satellites.
+- **Service Hôte `HephaistHostService.kt`** :
+  - Service bound exporté avec action `org.hephaistos.service.HOST_IPC`.
+  - Gestion sécurisée des connexions satellites, dispatch des commandes d'ingénierie, enregistrement des outils partagés dans `AddonRegistry`.
+
+### Phase 3 : Refonte Complète des Templates dans Paramètres (`SettingsScreen.kt`)
+- Remplacement des anciens aperçus par une interface pédagogique structurée en 4 volets interactifs :
+  1. **Déclaration Canonique (Manifest & ADN)** : XML prêt pour `AndroidManifest.xml`, intent-filters, meta-data des capacités et permissions.
+  2. **Charte Visuelle & Thème Jetpack Compose** : Code source complet des couleurs, formes et composants de base pour que le satellite arbore rigoureusement le même style (mode sombre/clair automatique, cartes profilées, polices monospace techniques).
+  3. **Code Client AIDL & Communication** : Exemple Kotlin clé en main pour se lier à `HephaistHostService` et exécuter une tâche en quelques lignes de code.
+  4. **Prompt Clé-en-Main pour IA & AI Studio** : Un bloc de prompt optimisé copiable en un clic, à coller dans AI Studio pour créer immédiatement un satellite autonome et conforme sans ambiguïté.
+
+### Phase 4 : Bible Canonique HSAS v1.0 & Déploiement GitHub / Starter Kit
+- **`README.md` à la racine** : Présentation du projet HephaistOS avec badge et lien d'accès direct vers le guide canonique HSAS.
+- **`docs/HSAS_SPECIFICATION.md`** : La bible complète d'architecture contenant le dictionnaire des capacités standards, la spécification d'interopérabilité IPC, les contrats d'interface, et les règles d'ergonomie visuelle.
+- **Mise à jour de `PdfExporterService.kt` & Starter Kit ZIP** :
+  - Génération d'un kit de démarrage `.zip` enrichi contenant :
+    - `README.md` complet et téléchargeable.
+    - Code source Compose d'un satellite complet (`MainActivity.kt`, `HephaistTheme.kt`, `IHephaistHostService.aidl`, `SatelliteService.kt`).
+    - `AndroidManifest.xml` pré-configuré.
+    - Guide prompt pour agents d'IA.
+  - Document PDF officiel HSAS v1.0 actualisé avec les schémas AIDL et la charte d'interopérabilité.
 
 ---
 
-## 4. Architecture Technique
+## 3. Fichiers Concernés & Modifications
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                    ARCHITECTURE DU SUIVI TEMPS RÉEL                     │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                         │
-│  [ Noyau Android / Loop Device ]                                        │
-│         │                                                               │
-│         ▼                                                               │
-│  [ Script Shell Privilégié UKA ]                                        │
-│         ├── Flux Tar / Verbose Extraction (EXTR_ITEM:<path>)            │
-│         └── Sonde Disque en arrière-plan (DISK_MB:<megabytes>)          │
-│         │                                                               │
-│         ▼                                                               │
-│  [ RootDelegator & UkaEngine ]                                          │
-│         ├── Filtrage & régulation (Throttling 200ms pour fluidité UI)   │
-│         ├── Calcul de ratio (Mo extraits / Mo attendus)                 │
-│         └── Pulsation Heartbeat Kotlin (garantie zéro gel)              │
-│         │                                                               │
-│         ▼                                                               │
-│  [ HephaistViewModel -> UnpackUiState ]                                 │
-│         ├── progress (animateFloatAsState)                              │
-│         ├── currentStep (Libellé dynamique avec Mo & compteurs)         │
-│         └── recentLogs (Historique avec auto-scroll)                    │
-│         │                                                               │
-│         ▼                                                               │
-│  [ UnpackRepackScreen & ExecutionLogCard ]                              │
-│         └── Affichage temps réel interactif et rassurant                │
-└─────────────────────────────────────────────────────────────────────────┘
-```
+| Fichier | Modification |
+|---|---|
+| `app/src/main/AndroidManifest.xml` | Déclaration des actions de requêtes `<queries>`, permission de lecture de paquets, et déclaration du récepteur de paquets et de `HephaistHostService`. |
+| `app/src/main/aidl/org/hephaistos/ipc/IHephaistHostService.aidl` | Définition de l'interface AIDL d'interopérabilité hôte-satellites. |
+| `app/src/main/java/com/example/data/HephaistHostService.kt` | Implémentation du service hôte Android pour le partage des outils et l'exécution distante. |
+| `app/src/main/java/com/example/data/AddonRegistry.kt` | Enrichissement du moteur de découverte automatique (Activités + Services + Meta-data) et gestion du registre des outils. |
+| `app/src/main/java/com/example/data/PackageReceiver.kt` | BroadcastReceiver écoutant l'installation et la désinstallation de packages en temps réel. |
+| `app/src/main/java/com/example/ui/HephaistViewModel.kt` | Enregistrement du récepteur de paquets et déclenchement réactif de `refreshCompatibleApps()`. |
+| `app/src/main/java/com/example/ui/screens/SettingsScreen.kt` | Refonte intégrale de l'onglet Modèles avec la documentation HSAS v1.0, les blocs de code Compose, AIDL et le prompt IA. |
+| `app/src/main/java/com/example/data/PdfExporterService.kt` | Génération du nouveau ZIP Starter Kit complet avec l'arborescence projet Android et la documentation HSAS v1.0. |
+| `README.md` | Page d'accueil GitHub avec lien vers la spécification HSAS. |
+| `docs/HSAS_SPECIFICATION.md` | Bible architecturale canonique complète et exhaustive pour développeurs et intelligences artificielles. |
 
-### Plan des Modifications de Fichiers
+---
 
-1. **`app/src/main/java/com/example/data/UkaEngine.kt` :**
-   - Refactoriser `mountAndExtractLoopWithShortPath` avec le pipeline streaming `tar` et la sonde de taille disque en tâche de fond.
-   - Intégrer la coroutine heartbeat pour garantir l'animation constante de la barre et du texte d'étape.
-   - Réguler les événements pour ne pas surcharger la boucle Compose tout en garantissant une réactivité immédiate.
-   - Ajouter la copie tamponnée par blocs de 4 Mo avec suivi en temps réel pour l'image brute de partition.
-   - Améliorer le repack EXT4 en supportant `mke2fs` et `e2fsdroid` avant le repli sur blocs.
+## 4. Vérification & Validation
 
-2. **`app/src/main/java/com/example/ui/components/HephaistNavRail.kt` :**
-   - Corriger le dimensionnement interne et la synchronisation de l'animation de largeur.
-   - Remplacer le saut de texte par un `expandHorizontally() + fadeIn()` avec `maxLines = 1, softWrap = false` pour éliminer le texte vertical tronqué.
-   - Améliorer la cinématique ressort (`Spring.DampingRatioMediumBouncy`, `Spring.StiffnessMediumLow`) et le design des boutons (puces actives, alignement soigné, ombre portée douce).
-
-3. **`app/src/main/java/com/example/ui/screens/UnpackRepackScreen.kt` :**
-   - Ajouter l'auto-scroll automatique sur la liste des logs dans `ExecutionLogCard` à chaque nouvel élément reçu.
-   - Adoucir la barre de progression linéaire avec `animateFloatAsState`.
-   - Afficher un badge pulsant d'activité pendant l'extraction.
+1. **Compilation Android** : Exécution de `compile_applet` pour valider l'absence d'erreurs de syntaxe, la conformité AIDL / Service et la cohérence de l'arbre Compose.
+2. **Cycle de Vie Paquet** : Vérification de la détection dynamique d'un nouveau satellite sans redémarrage de l'application hôte.
+3. **Génération & Export** : Contrôle de la création du Starter Kit ZIP et de la présence des fichiers `README.md`, `HSAS_SPECIFICATION.md` et modèles Kotlin/Compose.
+4. **Fidélité Visuelle & UX** : Validation de la cohérence de l'interface dans l'onglet Paramètres avec le thème et le rail de navigation de l'hôte.

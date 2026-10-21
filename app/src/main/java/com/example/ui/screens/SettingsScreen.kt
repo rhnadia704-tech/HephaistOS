@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Download
@@ -75,12 +76,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.widget.Toast
 import com.example.data.KitchenEngine
 import com.example.model.ChangelogVersion
 import com.example.model.ColorStyle
@@ -715,7 +719,8 @@ private fun AddonTemplateTab(
     onOpenPdf: () -> Unit,
     onDownloadStarterKit: () -> Unit
 ) {
-    var selectedTemplateCategory by remember { mutableIntStateOf(0) } // 0: APK, 1: Script, 2: WebApp
+    val context = LocalContext.current
+    var selectedTemplateCategory by remember { mutableIntStateOf(0) }
 
     LazyColumn(
         modifier = Modifier
@@ -790,7 +795,7 @@ private fun AddonTemplateTab(
                                 modifier = Modifier.size(16.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Télécharger / Ouvrir")
+                            Text("Guide PDF")
                         }
 
                         OutlinedButton(
@@ -806,6 +811,25 @@ private fun AddonTemplateTab(
                             Spacer(modifier = Modifier.width(6.dp))
                             Text("Starter Kit (ZIP)")
                         }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    OutlinedButton(
+                        onClick = {
+                            val file = com.example.data.PdfExporterService.exportStandaloneReadme(context)
+                            Toast.makeText(context, "README officiel exporté dans ${file.name} !", Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Description,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Exporter le README.md de Référence")
                     }
                 }
             }
@@ -837,12 +861,14 @@ private fun AddonTemplateTab(
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         val categories = listOf(
-                            Triple("APK Satellite", Icons.Default.Android, 0),
-                            Triple("Script Satellite", Icons.Default.Terminal, 1),
-                            Triple("WebApp Satellite", Icons.Default.Language, 2)
+                            Triple("1. ADN Manifest", Icons.Default.Security, 0),
+                            Triple("2. Thème Compose", Icons.Default.Palette, 1),
+                            Triple("3. IPC & AIDL", Icons.Default.Code, 2),
+                            Triple("4. Prompt IA", Icons.Default.Android, 3),
+                            Triple("5. Scripts & Web", Icons.Default.Terminal, 4)
                         )
 
                         for ((label, icon, index) in categories) {
@@ -859,10 +885,10 @@ private fun AddonTemplateTab(
                                     ),
                                 color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh
                             ) {
-                                Row(
-                                    modifier = Modifier.padding(vertical = 10.dp, horizontal = 6.dp),
-                                    horizontalArrangement = Arrangement.Center,
-                                    verticalAlignment = Alignment.CenterVertically
+                                Column(
+                                    modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.Center
                                 ) {
                                     Icon(
                                         imageVector = icon,
@@ -870,11 +896,12 @@ private fun AddonTemplateTab(
                                         modifier = Modifier.size(16.dp),
                                         tint = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
                                     )
-                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Spacer(modifier = Modifier.height(4.dp))
                                     Text(
-                                        text = label.split(" ")[0],
+                                        text = label.split(" ")[1],
                                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                        fontSize = 12.sp,
+                                        fontSize = 10.5.sp,
+                                        maxLines = 1,
                                         color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
                                     )
                                 }
@@ -885,9 +912,11 @@ private fun AddonTemplateTab(
                     Spacer(modifier = Modifier.height(16.dp))
 
                     when (selectedTemplateCategory) {
-                        0 -> ApkSatelliteTemplateView()
-                        1 -> ScriptSatelliteTemplateView()
-                        2 -> WebAppSatelliteTemplateView()
+                        0 -> HsasManifestTemplateView()
+                        1 -> HsasDesignSystemTemplateView()
+                        2 -> HsasIpcAidlTemplateView()
+                        3 -> HsasAiStudioPromptTemplateView()
+                        4 -> HsasScriptsAndWebTemplateView()
                     }
                 }
             }
@@ -907,23 +936,95 @@ private fun AddonTemplateTab(
 }
 
 @Composable
-private fun ApkSatelliteTemplateView() {
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        // Directives Banner on HephaistOS DNA
+private fun CodeSnippetCard(
+    title: String,
+    code: String,
+    languageColor: Color = Color(0xFFA5D6A7),
+    modifier: Modifier = Modifier
+) {
+    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
+
+    Column(modifier = modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 6.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = title,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 12.5.sp,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Surface(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable {
+                        clipboard.setText(AnnotatedString(code))
+                        Toast.makeText(context, "Code copié dans le presse-papiers !", Toast.LENGTH_SHORT).show()
+                    },
+                color = MaterialTheme.colorScheme.surfaceContainerHigh
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ContentCopy,
+                        contentDescription = "Copier",
+                        modifier = Modifier.size(14.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Copier",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .background(Color(0xFF14161A))
+                .border(1.dp, Color(0xFF282C34), RoundedCornerShape(8.dp))
+                .padding(10.dp)
+        ) {
+            Text(
+                text = code,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+                color = languageColor,
+                lineHeight = 14.sp
+            )
+        }
+    }
+}
+
+@Composable
+private fun HsasManifestTemplateView() {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Surface(
             color = MaterialTheme.colorScheme.primaryContainer,
             shape = RoundedCornerShape(10.dp)
         ) {
             Column(modifier = Modifier.padding(12.dp)) {
                 Text(
-                    text = "ADN REQUIS POUR ÊTRE DÉTECTÉ PAR HEPHAISTOS",
+                    text = "ADN CANONIQUE HSAS v1.0 POUR DÉTECTION IMMÉDIATE",
                     fontWeight = FontWeight.Bold,
-                    fontSize = 12.sp,
+                    fontSize = 11.5.sp,
                     color = MaterialTheme.colorScheme.onPrimaryContainer
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "HephaistOS applique un filtrage strict par signature. Les applications ordinaires du téléphone (Gmail, Téléphone, banques...) sont systématiquement exclues de l'accueil. Pour être reconnu comme satellite, votre APK doit obligatoirement déclarer l'action d'intention ci-dessous.",
+                    text = "Dès que l'APK est installé sur l'appareil, HephaistOS l'intercepte via son écouteur de paquets et son analyseur d'intention. Votre satellite s'affichera immédiatement sur l'écran d'accueil sans redémarrage de l'hôte.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onPrimaryContainer,
                     lineHeight = 16.sp
@@ -931,200 +1032,342 @@ private fun ApkSatelliteTemplateView() {
             }
         }
 
-        Text(
-            text = "1. Marqueur AndroidManifest.xml obligatoire (ADN) :",
-            fontWeight = FontWeight.SemiBold,
-            fontSize = 13.sp,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(8.dp))
-                .background(Color(0xFF1E2024))
-                .padding(10.dp)
-        ) {
-            Text(
-                text = """
-                <activity android:name=".MainActivity" android:exported="true">
-                    <intent-filter>
-                        <action android:name="android.intent.action.MAIN" />
-                        <!-- ADN UNIQUE HEPHAISTOS OBLIGATOIRE -->
-                        <action android:name="org.hephaistos.action.ADDON" />
-                        <category android:name="org.hephaistos.category.ADDON" />
-                        <category android:name="android.intent.category.DEFAULT" />
-                    </intent-filter>
-                    
-                    <!-- Liste des capacités déclarées séparées par des virgules -->
+        val manifestSnippet = """
+            <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+                package="com.example.satellite">
+
+                <!-- Requête obligatoire pour communiquer avec le service hôte -->
+                <queries>
+                    <intent>
+                        <action android:name="org.hephaistos.service.HOST_IPC" />
+                    </intent>
+                </queries>
+
+                <application
+                    android:label="Satellite HephaistOS"
+                    android:theme="@style/Theme.Material3.DayNight.NoActionBar">
+
+                    <!-- Empreinte ADN Canonique HSAS v1.0 -->
                     <meta-data
-                        android:name="org.hephaistos.addon.CAPABILITIES"
-                        android:value="kitchen.unpack,kitchen.repack,payload.dumper,erofs.tools" />
-                </activity>
-                """.trimIndent(),
-                fontFamily = FontFamily.Monospace,
-                fontSize = 10.5.sp,
-                color = Color(0xFFA5D6A7)
-            )
+                        android:name="org.hephaistos.satellite.V1"
+                        android:value="true" />
+                    <meta-data
+                        android:name="org.hephaistos.satellite.ROLE"
+                        android:value="Éditeur de Configuration & Outils Système" />
+
+                    <!-- Activité Principale du Satellite -->
+                    <activity
+                        android:name=".MainActivity"
+                        android:exported="true">
+                        <intent-filter>
+                            <action android:name="android.intent.action.MAIN" />
+                            <category android:name="android.intent.category.LAUNCHER" />
+
+                            <!-- Actions officielles de reconnaissance HephaistOS -->
+                            <action android:name="org.hephaistos.action.SATELLITE" />
+                            <action android:name="org.hephaistos.action.ADDON" />
+                            <category android:name="android.intent.category.DEFAULT" />
+                        </intent-filter>
+
+                        <!-- Capacités partagées déclarées dans l'annuaire -->
+                        <meta-data
+                            android:name="org.hephaistos.addon.CAPABILITIES"
+                            android:value="kitchen.unpack,kitchen.repack,prop.editor" />
+                    </activity>
+                </application>
+            </manifest>
+        """.trimIndent()
+
+        CodeSnippetCard(
+            title = "AndroidManifest.xml Canonique :",
+            code = manifestSnippet,
+            languageColor = Color(0xFFA5D6A7)
+        )
+    }
+}
+
+@Composable
+private fun HsasDesignSystemTemplateView() {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            shape = RoundedCornerShape(10.dp)
+        ) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Text(
+                    text = "CHARTE VISUELLE UNIFIÉE (ADN HEPHAISTOS)",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 11.5.sp,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Pour former une extension naturelle, le satellite doit adopter les mêmes teintes : fond sombre #0D0E11, cartes #1C1F26 avec contour fin #282C34 et accent Orange Forge #E67E22. En mode clair, il s'adapte automatiquement.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 16.sp
+                )
+            }
         }
 
-        Text(
-            text = "2. Réception des requêtes IPC et exécution (Kotlin) :",
-            fontWeight = FontWeight.SemiBold,
-            fontSize = 13.sp,
-            color = MaterialTheme.colorScheme.onSurface
+        val themeSnippet = """
+            package com.example.satellite.ui.theme
+
+            import androidx.compose.foundation.isSystemInDarkTheme
+            import androidx.compose.material3.*
+            import androidx.compose.runtime.Composable
+            import androidx.compose.ui.graphics.Color
+
+            val HephaistOrange = Color(0xFFE67E22)
+            val DarkBackground = Color(0xFF0D0E11)
+            val DarkSurface = Color(0xFF14161A)
+            val DarkSurfaceContainer = Color(0xFF1C1F26)
+            val TextPrimary = Color(0xFFF0F2F5)
+            val TextSecondary = Color(0xFF9AA0A6)
+
+            private val DarkColorScheme = darkColorScheme(
+                primary = HephaistOrange,
+                background = DarkBackground,
+                surface = DarkSurface,
+                surfaceContainer = DarkSurfaceContainer,
+                onPrimary = Color.White,
+                onBackground = TextPrimary,
+                onSurface = TextPrimary,
+                onSurfaceVariant = TextSecondary
+            )
+
+            private val LightColorScheme = lightColorScheme(
+                primary = Color(0xFFD35400),
+                background = Color(0xFFF8F9FA),
+                surface = Color(0xFFFFFFFF),
+                surfaceContainer = Color(0xFFF1F3F4),
+                onPrimary = Color.White,
+                onBackground = Color(0xFF1F1F1F),
+                onSurface = Color(0xFF1F1F1F),
+                onSurfaceVariant = Color(0xFF5F6368)
+            )
+
+            @Composable
+            fun HephaistSatelliteTheme(
+                darkTheme: Boolean = isSystemInDarkTheme(),
+                content: @Composable () -> Unit
+            ) {
+                MaterialTheme(
+                    colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme,
+                    content = content
+                )
+            }
+        """.trimIndent()
+
+        CodeSnippetCard(
+            title = "Thème Jetpack Compose (HephaistTheme.kt) :",
+            code = themeSnippet,
+            languageColor = Color(0xFFFFCC80)
         )
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(8.dp))
-                .background(Color(0xFF1E2024))
-                .padding(10.dp)
+    }
+}
+
+@Composable
+private fun HsasIpcAidlTemplateView() {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            shape = RoundedCornerShape(10.dp)
         ) {
-            Text(
-                text = """
-                class HephaistosSatelliteReceiver : BroadcastReceiver() {
-                    override fun onReceive(context: Context, intent: Intent) {
-                        if (intent.action == "org.hephaistos.action.INVOKE_TOOL") {
-                            val targetPath = intent.getStringExtra("TARGET_DIR") ?: return
-                            val command = intent.getStringExtra("COMMAND") ?: "inspect"
-                            
-                            // 1. Exécution de la tâche modulaire
-                            val success = processSatelliteTask(targetPath, command)
-                            
-                            // 2. Notification de résultat à l'hôte HephaistOS
-                            val response = Intent("org.hephaistos.action.TASK_RESULT").apply {
-                                putExtra("STATUS", if (success) "SUCCESS" else "ERROR")
-                                putExtra("LOGS", "Tâche [${'$'}command] terminée.")
-                            }
-                            context.sendBroadcast(response)
+            Column(modifier = Modifier.padding(12.dp)) {
+                Text(
+                    text = "PROTOCOLE D'INTEROPÉRABILITÉ IPC & SERVICE BOUND",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 11.5.sp,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "HephaistOS expose le service 'org.hephaistos.service.HOST_IPC'. Le satellite s'y lie via AIDL et peut invoquer les outils de l'hôte (déballage, permissions, root, workspace) et écrire dans la console terminal d'HephaistOS.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 16.sp
+                )
+            }
+        }
+
+        val aidlSnippet = """
+            package org.hephaistos.ipc;
+
+            interface IHephaistHostService {
+                String executeHostTool(String toolId, String jsonParams);
+                String getWorkspaceRootPath();
+                void logToHostTerminal(String senderTag, String message);
+                String getEcosystemRegistryJson();
+                boolean isHostRootAvailable();
+            }
+        """.trimIndent()
+
+        CodeSnippetCard(
+            title = "Interface AIDL (IHephaistHostService.aidl) :",
+            code = aidlSnippet,
+            languageColor = Color(0xFF90CAF9)
+        )
+
+        val connectorSnippet = """
+            class HostConnector(private val context: Context) {
+                private var hostService: IHephaistHostService? = null
+                var isConnected: Boolean = false
+
+                private val connection = object : ServiceConnection {
+                    override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+                        hostService = IHephaistHostService.Stub.asInterface(service)
+                        isConnected = true
+                        hostService?.logToHostTerminal("MonSatellite", "Connecté avec succès à l'hôte HephaistOS !")
+                    }
+                    override fun onServiceDisconnected(name: ComponentName?) {
+                        hostService = null
+                        isConnected = false
+                    }
+                }
+
+                fun bind() {
+                    val intent = Intent("org.hephaistos.service.HOST_IPC")
+                    context.bindService(intent, connection, Context.BIND_AUTO_CREATE)
+                }
+
+                fun triggerTool(toolId: String, paramsJson: String): String? {
+                    return hostService?.executeHostTool(toolId, paramsJson)
+                }
+            }
+        """.trimIndent()
+
+        CodeSnippetCard(
+            title = "Connexion & Invocation Kotlin (HostConnector.kt) :",
+            code = connectorSnippet,
+            languageColor = Color(0xFFCE93D8)
+        )
+    }
+}
+
+@Composable
+private fun HsasAiStudioPromptTemplateView() {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Surface(
+            color = MaterialTheme.colorScheme.primaryContainer,
+            shape = RoundedCornerShape(10.dp)
+        ) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Text(
+                    text = "PROMPT CLÉ-EN-MAIN POUR GOOGLE AI STUDIO",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 11.5.sp,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Copiez ce prompt dans Google AI Studio (même sur un autre compte) pour générer automatiquement une application satellite 100% conforme à HephaistOS, avec détection immédiate et harmonie visuelle sans faille.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    lineHeight = 16.sp
+                )
+            }
+        }
+
+        val promptSnippet = """
+            Tu es chargé de créer une Application Satellite officielle pour le système HephaistOS, conforme à la norme HSAS v1.0 (HephaistOS Satellite Application Standard).
+
+            Directives impératives d'architecture :
+            1. AndroidManifest.xml :
+               - Déclare dans l'activité principale :
+                 <action android:name="org.hephaistos.action.SATELLITE" />
+                 <action android:name="org.hephaistos.action.ADDON" />
+               - Déclare les métadonnées obligatoires :
+                 <meta-data android:name="org.hephaistos.satellite.V1" android:value="true" />
+                 <meta-data android:name="org.hephaistos.satellite.ROLE" android:value="<Role_de_ton_satellite>" />
+                 <meta-data android:name="org.hephaistos.addon.CAPABILITIES" android:value="kitchen.unpack,kitchen.repack,prop.editor" />
+               - Ajoute la requête de service :
+                 <queries><intent><action android:name="org.hephaistos.service.HOST_IPC" /></intent></queries>
+
+            2. Interface Jetpack Compose & ADN HephaistOS :
+               - Adopte fidèlement la palette d'HephaistOS :
+                 Fond sombre : #0D0E11, Cartes : #1C1F26 avec contour fin #282C34, Accent : #E67E22 (Orange Forge).
+               - Cartes M3 avec coins arrondis de 16.dp.
+               - Boutons tactiles d'au moins 48.dp de hauteur.
+               - Logs et commandes en police Monospace (10.sp).
+               - Barre d'en-tête épurée avec statut vert 'Satellite HephaistOS Connecté'.
+
+            3. Logique & Partage d'Outils :
+               - Opère dans le workspace standard /sdcard/HEPHAISTOS/ (UNPACKED, PACKED, Data/unpack).
+               - Intègre la liaison AIDL vers org.hephaistos.service.HOST_IPC (IHephaistHostService).
+               - Fournis un README.md récapitulant les fonctionnalités du satellite.
+        """.trimIndent()
+
+        CodeSnippetCard(
+            title = "Prompt Système à copier dans Google AI Studio :",
+            code = promptSnippet,
+            languageColor = Color(0xFF80DEEA)
+        )
+    }
+}
+
+@Composable
+private fun HsasScriptsAndWebTemplateView() {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        val shContent = """
+            #!/system/bin/sh
+            # HEPHAISTOS_SCRIPT_V1
+            # NAME: Custom EROFS Builder
+            # DESCRIPTION: Repack une partition avec compression EROFS
+            # REQUIRE_ROOT: true
+            # CAPABILITIES: erofs.compress,partition.repack
+
+            TARGET_DIR="${'$'}1"   # Dossier source dans UNPACKED/
+            OUTPUT_IMG="${'$'}2"   # Destination dans PACKED/
+            CONFIG_DIR="${'$'}3"   # Métadonnées dans Data/unpack/
+
+            echo "[SCRIPT] Traitement de : ${'$'}TARGET_DIR vers ${'$'}OUTPUT_IMG"
+            exit 0
+        """.trimIndent()
+
+        CodeSnippetCard(
+            title = "Script Shell Satellite (/sdcard/HEPHAISTOS/Scripts/) :",
+            code = shContent,
+            languageColor = Color(0xFFFFCC80)
+        )
+
+        val htmlContent = """
+            <!DOCTYPE html>
+            <html lang="fr">
+            <head>
+                <meta charset="utf-8">
+                <title>Satellite WebApp HephaistOS</title>
+                <style>
+                    body { font-family: sans-serif; background: #0D0E11; color: #F0F2F5; padding: 20px; }
+                    button { background: #E67E22; color: #fff; border: none; padding: 10px 18px; border-radius: 8px; font-weight: bold; cursor: pointer; }
+                    .card { background: #1C1F26; padding: 16px; border-radius: 12px; margin-top: 16px; border: 1px solid #282C34; }
+                </style>
+            </head>
+            <body>
+                <h2>Satellite WebApp HephaistOS</h2>
+                <div class="card">
+                    <p>Contrôlez l'environnement hôte directement depuis cette WebApp.</p>
+                    <button onclick="triggerAction()">Lancer Commande Hôte</button>
+                </div>
+                <script>
+                    function triggerAction() {
+                        if (window.HephaistosBridge) {
+                            window.HephaistosBridge.log('[WEBAPP] Action déclenchée depuis la WebApp !');
+                            window.HephaistosBridge.executeCommand('kitchen tools');
+                        } else {
+                            alert('Bridge HephaistosBridge non disponible hors de HephaistOS');
                         }
                     }
-                }
-                """.trimIndent(),
-                fontFamily = FontFamily.Monospace,
-                fontSize = 10.5.sp,
-                color = Color(0xFF90CAF9)
-            )
-        }
-    }
-}
+                </script>
+            </body>
+            </html>
+        """.trimIndent()
 
-@Composable
-private fun ScriptSatelliteTemplateView() {
-    Column {
-        Text(
-            text = "1. En-tête normalisé Shell (.sh) dans /sdcard/HEPHAISTOS/Scripts/ :",
-            fontWeight = FontWeight.SemiBold,
-            fontSize = 13.sp,
-            color = MaterialTheme.colorScheme.onSurface
+        CodeSnippetCard(
+            title = "WebApp Locale Satellite (/sdcard/HEPHAISTOS/WebApps/) :",
+            code = htmlContent,
+            languageColor = Color(0xFFCE93D8)
         )
-        Spacer(modifier = Modifier.height(4.dp))
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(8.dp))
-                .background(Color(0xFF1E2024))
-                .padding(10.dp)
-        ) {
-            Text(
-                text = """
-                #!/system/bin/sh
-                # HEPHAISTOS_SCRIPT_V1
-                # NAME: Custom EROFS Builder
-                # DESCRIPTION: Repack une partition avec compression EROFS
-                # REQUIRE_ROOT: true
-                # CAPABILITIES: erofs.compress,partition.repack
-
-                TARGET_DIR="${'$'}1"   # Dossier source dans UNPACKED/
-                OUTPUT_IMG="${'$'}2"   # Destination dans PACKED/
-                CONFIG_DIR="${'$'}3"   # Métadonnées dans Data/unpack/
-
-                echo "[SCRIPT] Repack de ${'$'}TARGET_DIR vers ${'$'}OUTPUT_IMG..."
-                # Exécution des commandes kitchen...
-                exit 0
-                """.trimIndent(),
-                fontFamily = FontFamily.Monospace,
-                fontSize = 10.5.sp,
-                color = Color(0xFFFFCC80)
-            )
-        }
-
-        Spacer(modifier = Modifier.height(10.dp))
-        Text(
-            text = "2. Conventions des arguments transmis par l'hôte :",
-            fontWeight = FontWeight.SemiBold,
-            fontSize = 13.sp,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-        Text(
-            text = "• ${'$'}1 = Dossier cible dans /sdcard/HEPHAISTOS/UNPACKED/\n• ${'$'}2 = Destination dans /sdcard/HEPHAISTOS/PACKED/\n• ${'$'}3 = Métadonnées préservées dans /sdcard/HEPHAISTOS/Data/unpack/\n• Code 0 = Succès (logs affichés dans le Terminal en direct).",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
-}
-
-@Composable
-private fun WebAppSatelliteTemplateView() {
-    Column {
-        Text(
-            text = "1. Arborescence dans /sdcard/HEPHAISTOS/WebApps/<NomModule>/ :",
-            fontWeight = FontWeight.SemiBold,
-            fontSize = 13.sp,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-        Spacer(modifier = Modifier.height(4.dp))
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(8.dp))
-                .background(Color(0xFF1E2024))
-                .padding(10.dp)
-        ) {
-            Text(
-                text = """
-                MonModuleWeb/
-                ├── index.html        (Point d'entrée principal)
-                ├── app.js            (Logique applicative et Bridge)
-                ├── style.css         (Styles personnalisés)
-                └── manifest.json     ({"name": "Mon Module", "version": "1.0"})
-                """.trimIndent(),
-                fontFamily = FontFamily.Monospace,
-                fontSize = 10.5.sp,
-                color = Color(0xFFCE93D8)
-            )
-        }
-
-        Spacer(modifier = Modifier.height(10.dp))
-        Text(
-            text = "2. Appel du Bridge JavaScript 'window.HephaistosBridge' :",
-            fontWeight = FontWeight.SemiBold,
-            fontSize = 13.sp,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-        Spacer(modifier = Modifier.height(4.dp))
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(8.dp))
-                .background(Color(0xFF1E2024))
-                .padding(10.dp)
-        ) {
-            Text(
-                text = """
-                // Déclencher une commande hôte et écrire dans le terminal :
-                function declencherRepack() {
-                    if (window.HephaistosBridge) {
-                        window.HephaistosBridge.log("[WEBAPP] Lancement du repack demandé");
-                        window.HephaistosBridge.executeCommand("kitchen repack system");
-                    }
-                }
-                """.trimIndent(),
-                fontFamily = FontFamily.Monospace,
-                fontSize = 10.5.sp,
-                color = Color(0xFF80DEEA)
-            )
-        }
     }
 }
 

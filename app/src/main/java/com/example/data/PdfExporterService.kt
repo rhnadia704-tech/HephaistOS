@@ -364,30 +364,112 @@ object PdfExporterService {
         val zipFile = File(destDir, STARTER_KIT_ZIP_NAME)
         FileOutputStream(zipFile).use { fos ->
             ZipOutputStream(fos).use { zos ->
-                // 1. APK Satellite: AndroidManifest.xml
+                // 1. Comprehensive README.md for Satellites
+                val readmeContent = """
+                    # HephaistOS Satellite Application Standard (HSAS v1.0)
+                    ## Guide Officiel de Développement et d'Architecture
+
+                    Bienvenue dans le kit de démarrage officiel pour créer des applications satellites HephaistOS.
+
+                    ### 1. Rôle d'une Application Satellite
+                    Une application satellite est une extension modulaire autonome pour Android.
+                    Une fois installée sur l'appareil :
+                    - Elle est DÉTECTÉE IMMÉDIATEMENT par l'application hôte HephaistOS grâce aux filtres d'intention et méta-données HSAS.
+                    - Elle adopte rigoureusement la charte graphique d'HephaistOS (Thème sombre/clair, cartes M3, boutons tactiles 48dp, console terminal monospace).
+                    - Elle peut communiquer de manière bidirectionnelle avec l'hôte via AIDL (action org.hephaistos.service.HOST_IPC).
+                    - Elle opère dans le workspace commun /sdcard/HEPHAISTOS/.
+
+                    ### 2. Contenu du Kit
+                    - `apk_satellite/` : Projet source Android & Jetpack Compose complet prêt à compiler.
+                      - `AndroidManifest.xml` : Empreinte ADN officielle pour la détection automatique.
+                      - `aidl/IHephaistHostService.aidl` : Contrat d'interface IPC standard.
+                      - `ui/theme/HephaistTheme.kt` : Thème Jetpack Compose calqué sur HephaistOS.
+                      - `ipc/HostConnector.kt` : Gestionnaire de liaison avec le service hôte.
+                    - `AI_STUDIO_PROMPT.txt` : Prompt clé-en-main à copier dans Google AI Studio pour générer un nouveau satellite.
+                    - `scripts/` : Modèles de scripts shell (.sh) et python (.py) pour /sdcard/HEPHAISTOS/Scripts/.
+                    - `webapps/` : Modèle d'application web locale HTML5/JS pour /sdcard/HEPHAISTOS/WebApps/.
+
+                    ### 3. Dictionnaire des Capacités Standards
+                    Déclarez vos capacités dans la méta-donnée `org.hephaistos.addon.CAPABILITIES` :
+                    - `kitchen.unpack` : Déballage d'images de partitions
+                    - `kitchen.repack` : Recompilation bit-à-bit
+                    - `payload.dumper` : Extraction payload.bin
+                    - `erofs.tools` : Outils EROFS
+                    - `prop.editor` : Éditeur build.prop
+                    - `magisk.patch` : Patching boot.img
+                    - `dsu.installer` : Déploiement DSU Sideloader
+                """.trimIndent()
+                zos.putNextEntry(ZipEntry("README.md"))
+                zos.write(readmeContent.toByteArray())
+                zos.closeEntry()
+
+                // 2. AI Studio Ready-to-use Prompt
+                val aiPrompt = """
+                    Tu es chargé de créer une Application Satellite officielle pour le système HephaistOS, conforme à la norme HSAS v1.0.
+
+                    Directives impératives :
+                    1. AndroidManifest.xml :
+                       - Activité principale avec action org.hephaistos.action.SATELLITE et org.hephaistos.action.ADDON.
+                       - Méta-données : org.hephaistos.satellite.V1 = true, org.hephaistos.addon.CAPABILITIES, org.hephaistos.satellite.ROLE.
+                    2. Interface Jetpack Compose :
+                       - Adopte l'ADN visuel HephaistOS : Fond #0D0E11, Cartes #1C1F26, Accent #E67E22 (Orange Forge).
+                       - Typographie monospace pour les commandes et les logs.
+                       - Header épuré avec bouton retour et statut 'Satellite HephaistOS Connecté'.
+                    3. Logique & Interopérabilité :
+                       - Connexion à org.hephaistos.service.HOST_IPC via IHephaistHostService.aidl.
+                       - Opère dans le workspace /sdcard/HEPHAISTOS/.
+                """.trimIndent()
+                zos.putNextEntry(ZipEntry("AI_STUDIO_PROMPT.txt"))
+                zos.write(aiPrompt.toByteArray())
+                zos.closeEntry()
+
+                // 3. AndroidManifest.xml
                 val manifestContent = """
                     <?xml version="1.0" encoding="utf-8"?>
                     <manifest xmlns:android="http://schemas.android.com/apk/res/android"
                         package="org.hephaistos.satellite.template">
 
+                        <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+                        <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
+                        <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+                        <uses-permission android:name="android.permission.INTERNET" />
+
+                        <queries>
+                            <intent>
+                                <action android:name="org.hephaistos.service.HOST_IPC" />
+                            </intent>
+                        </queries>
+
                         <application
                             android:allowBackup="true"
                             android:icon="@mipmap/ic_launcher"
-                            android:label="Satellite HephaistOS Template">
+                            android:label="Satellite HephaistOS Modèle"
+                            android:theme="@style/Theme.Material3.DayNight.NoActionBar">
+
+                            <!-- Empreinte ADN Canonique HSAS v1.0 -->
+                            <meta-data
+                                android:name="org.hephaistos.satellite.V1"
+                                android:value="true" />
+                            <meta-data
+                                android:name="org.hephaistos.satellite.ROLE"
+                                android:value="Module d'Ingénierie & Outils Personnalisés" />
 
                             <activity
                                 android:name=".MainActivity"
                                 android:exported="true">
                                 <intent-filter>
                                     <action android:name="android.intent.action.MAIN" />
-                                    <!-- Marqueur officiel HephaistOS Addon / Satellite -->
+                                    <category android:name="android.intent.category.LAUNCHER" />
+
+                                    <!-- Actions obligatoires de détection HephaistOS -->
+                                    <action android:name="org.hephaistos.action.SATELLITE" />
                                     <action android:name="org.hephaistos.action.ADDON" />
-                                    <category android:name="org.hephaistos.category.ADDON" />
                                     <category android:name="android.intent.category.DEFAULT" />
                                 </intent-filter>
+
                                 <meta-data
                                     android:name="org.hephaistos.addon.CAPABILITIES"
-                                    android:value="gsi.unpack,rom.repack,payload.dumper,erofs.tools" />
+                                    android:value="kitchen.unpack,kitchen.repack,prop.editor" />
                             </activity>
                         </application>
                     </manifest>
@@ -396,29 +478,132 @@ object PdfExporterService {
                 zos.write(manifestContent.toByteArray())
                 zos.closeEntry()
 
-                // 2. APK Satellite: HephaistSatelliteClient.kt
-                val kotlinContent = """
-                    package org.hephaistos.satellite.template
+                // 4. AIDL Interface
+                val aidlContent = """
+                    package org.hephaistos.ipc;
 
-                    object HephaistSatelliteClient {
-                        const val WORKSPACE_PATH = "/sdcard/HEPHAISTOS/"
-                        const val UNPACKED_DIR = "/sdcard/HEPHAISTOS/UNPACKED/"
-                        const val PACKED_DIR = "/sdcard/HEPHAISTOS/PACKED/"
-                        const val DATA_UNPACK_DIR = "/sdcard/HEPHAISTOS/Data/unpack/"
+                    interface IHephaistHostService {
+                        String executeHostTool(String toolId, String jsonParams);
+                        String getWorkspaceRootPath();
+                        void logToHostTerminal(String senderTag, String message);
+                        String getEcosystemRegistryJson();
+                        boolean isHostRootAvailable();
+                    }
+                """.trimIndent()
+                zos.putNextEntry(ZipEntry("apk_satellite/aidl/IHephaistHostService.aidl"))
+                zos.write(aidlContent.toByteArray())
+                zos.closeEntry()
 
-                        fun getCapabilities(): List<String> = listOf(
-                            "gsi.unpack",
-                            "rom.repack",
-                            "payload.dumper",
-                            "erofs.tools"
+                // 5. Compose Theme matching HephaistOS
+                val themeContent = """
+                    package org.hephaistos.satellite.template.ui.theme
+
+                    import androidx.compose.foundation.isSystemInDarkTheme
+                    import androidx.compose.material3.*
+                    import androidx.compose.runtime.Composable
+                    import androidx.compose.ui.graphics.Color
+
+                    val HephaistOrange = Color(0xFFE67E22)
+                    val DarkBackground = Color(0xFF0D0E11)
+                    val DarkSurface = Color(0xFF14161A)
+                    val DarkSurfaceContainer = Color(0xFF1C1F26)
+                    val TextPrimary = Color(0xFFF0F2F5)
+                    val TextSecondary = Color(0xFF9AA0A6)
+
+                    private val DarkColorScheme = darkColorScheme(
+                        primary = HephaistOrange,
+                        background = DarkBackground,
+                        surface = DarkSurface,
+                        surfaceContainer = DarkSurfaceContainer,
+                        onPrimary = Color.White,
+                        onBackground = TextPrimary,
+                        onSurface = TextPrimary,
+                        onSurfaceVariant = TextSecondary
+                    )
+
+                    private val LightColorScheme = lightColorScheme(
+                        primary = Color(0xFFD35400),
+                        background = Color(0xFFF8F9FA),
+                        surface = Color(0xFFFFFFFF),
+                        surfaceContainer = Color(0xFFF1F3F4),
+                        onPrimary = Color.White,
+                        onBackground = Color(0xFF1F1F1F),
+                        onSurface = Color(0xFF1F1F1F),
+                        onSurfaceVariant = Color(0xFF5F6368)
+                    )
+
+                    @Composable
+                    fun HephaistSatelliteTheme(
+                        darkTheme: Boolean = isSystemInDarkTheme(),
+                        content: @Composable () -> Unit
+                    ) {
+                        MaterialTheme(
+                            colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme,
+                            content = content
                         )
                     }
                 """.trimIndent()
-                zos.putNextEntry(ZipEntry("apk_satellite/HephaistSatelliteClient.kt"))
-                zos.write(kotlinContent.toByteArray())
+                zos.putNextEntry(ZipEntry("apk_satellite/ui/theme/HephaistTheme.kt"))
+                zos.write(themeContent.toByteArray())
                 zos.closeEntry()
 
-                // 3. Shell Script Template
+                // 6. HostConnector.kt (IPC Binding)
+                val connectorContent = """
+                    package org.hephaistos.satellite.template.ipc
+
+                    import android.content.ComponentName
+                    import android.content.Context
+                    import android.content.Intent
+                    import android.content.ServiceConnection
+                    import android.os.IBinder
+                    import org.hephaistos.ipc.IHephaistHostService
+
+                    class HostConnector(private val context: Context) {
+                        private var hostService: IHephaistHostService? = null
+                        var isConnected: Boolean = false
+                            private set
+
+                        private val connection = object : ServiceConnection {
+                            override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+                                hostService = IHephaistHostService.Stub.asInterface(service)
+                                isConnected = true
+                                hostService?.logToHostTerminal("SatelliteModèle", "Connexion IPC établie avec succès.")
+                            }
+
+                            override fun onServiceDisconnected(name: ComponentName?) {
+                                hostService = null
+                                isConnected = false
+                            }
+                        }
+
+                        fun bind(): Boolean {
+                            val intent = Intent("org.hephaistos.service.HOST_IPC")
+                            return context.bindService(intent, connection, Context.BIND_AUTO_CREATE)
+                        }
+
+                        fun unbind() {
+                            if (isConnected) {
+                                try {
+                                    context.unbindService(connection)
+                                } catch (_: Exception) {}
+                                isConnected = false
+                            }
+                        }
+
+                        fun executeTool(toolId: String, jsonParams: String): String? {
+                            return hostService?.executeHostTool(toolId, jsonParams)
+                        }
+
+                        fun logToHost(message: String) {
+                            hostService?.logToHostTerminal("SatelliteModèle", message)
+                        }
+                    }
+                """.trimIndent()
+                zos.putNextEntry(ZipEntry("apk_satellite/ipc/HostConnector.kt"))
+                zos.write(connectorContent.toByteArray())
+                zos.closeEntry()
+
+                // 7. Shell Script Template
                 val shContent = """
                     #!/system/bin/sh
                     # HEPHAISTOS_SCRIPT_V1
@@ -438,7 +623,7 @@ object PdfExporterService {
                 zos.write(shContent.toByteArray())
                 zos.closeEntry()
 
-                // 4. Python Script Template
+                // 8. Python Script Template
                 val pyContent = """
                     #!/usr/bin/env python3
                     # HEPHAISTOS_SCRIPT_V1
@@ -456,7 +641,7 @@ object PdfExporterService {
                 zos.write(pyContent.toByteArray())
                 zos.closeEntry()
 
-                // 5. WebApp Satellite Template
+                // 9. WebApp Satellite Template
                 val htmlContent = """
                     <!DOCTYPE html>
                     <html lang="fr">
@@ -464,9 +649,9 @@ object PdfExporterService {
                         <meta charset="utf-8">
                         <title>Satellite WebApp HephaistOS</title>
                         <style>
-                            body { font-family: sans-serif; background: #121418; color: #fff; padding: 20px; }
-                            button { background: #e67e22; color: #fff; border: none; padding: 10px 18px; border-radius: 8px; font-weight: bold; cursor: pointer; }
-                            .card { background: #1c2026; padding: 16px; border-radius: 12px; margin-top: 16px; }
+                            body { font-family: sans-serif; background: #0D0E11; color: #F0F2F5; padding: 20px; }
+                            button { background: #E67E22; color: #fff; border: none; padding: 10px 18px; border-radius: 8px; font-weight: bold; cursor: pointer; }
+                            .card { background: #1C1F26; padding: 16px; border-radius: 12px; margin-top: 16px; border: 1px solid #2B2E35; }
                         </style>
                     </head>
                     <body>
@@ -490,20 +675,6 @@ object PdfExporterService {
                 """.trimIndent()
                 zos.putNextEntry(ZipEntry("webapps/sample_webapp/index.html"))
                 zos.write(htmlContent.toByteArray())
-                zos.closeEntry()
-
-                // 6. README.md
-                val readmeContent = """
-                    # HephaistOS Starter Kit Satellites
-                    Ce kit contient l'ensemble des squelettes et modèles nécessaires pour créer :
-                    - Des APK Satellites Android
-                    - Des Scripts Satellites (.sh et .py)
-                    - Des WebApps Satellites (HTML5/JS avec HephaistosBridge)
-
-                    Tous ces satellites communiquent harmonieusement avec l'application hôte HephaistOS via /sdcard/HEPHAISTOS/.
-                """.trimIndent()
-                zos.putNextEntry(ZipEntry("README.md"))
-                zos.write(readmeContent.toByteArray())
                 zos.closeEntry()
             }
         }
@@ -539,5 +710,44 @@ object PdfExporterService {
                 context.startActivity(Intent.createChooser(shareIntent, "Partager le guide PDF des Satellites"))
             } catch (_: Exception) {}
         }
+    }
+
+    fun exportStandaloneReadme(context: Context): File {
+        val templatesDir = WorkspaceManager.getSubDir(context, "Templates")
+        val readmeFile = File(templatesDir, "README_HSAS_SATELLITE.md")
+        val content = """
+            # Guide et Spécification Canonique des Applications Satellites HephaistOS (HSAS v1.0)
+
+            Ce fichier récapitule l'ensemble des règles et directives pour créer et connecter une application satellite à HephaistOS.
+
+            ## 1. Détection Automatique
+            Déclarez dans votre AndroidManifest.xml :
+            ```xml
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+                <action android:name="org.hephaistos.action.SATELLITE" />
+                <action android:name="org.hephaistos.action.ADDON" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <meta-data android:name="org.hephaistos.satellite.V1" android:value="true" />
+            <meta-data android:name="org.hephaistos.addon.CAPABILITIES" android:value="kitchen.unpack,kitchen.repack,prop.editor" />
+            ```
+
+            ## 2. Charte Visuelle
+            - Fond sombre : #0D0E11
+            - Cartes : #1C1F26 avec bordure #2B2E35 et arrondi 16.dp
+            - Accent : #E67E22 (Orange Forge)
+            - Boutons tactiles : Hauteur minimale 48.dp
+            - Logs : Monospace 10-11sp
+
+            ## 3. Communication AIDL
+            Liez-vous au service hôte via l'action "org.hephaistos.service.HOST_IPC" et l'interface IHephaistHostService.aidl.
+
+            ## 4. Workspace
+            Tous les fichiers partagés résident dans /sdcard/HEPHAISTOS/ (UNPACKED, PACKED, Data/unpack).
+        """.trimIndent()
+        readmeFile.writeText(content)
+        return readmeFile
     }
 }

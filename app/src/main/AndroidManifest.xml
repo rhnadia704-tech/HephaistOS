@@ -11,7 +11,13 @@
 
     <queries>
         <intent>
+            <action android:name="org.hephaistos.action.SATELLITE" />
+        </intent>
+        <intent>
             <action android:name="org.hephaistos.action.ADDON" />
+        </intent>
+        <intent>
+            <action android:name="org.hephaistos.service.SATELLITE_IPC" />
         </intent>
     </queries>
 
@@ -38,6 +44,25 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".data.HephaistHostService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="org.hephaistos.service.HOST_IPC" />
+            </intent-filter>
+        </service>
+
+        <receiver
+            android:name=".data.PackageReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.PACKAGE_ADDED" />
+                <action android:name="android.intent.action.PACKAGE_REMOVED" />
+                <action android:name="android.intent.action.PACKAGE_REPLACED" />
+                <data android:scheme="package" />
+            </intent-filter>
+        </receiver>
 
         <provider
             android:name="androidx.core.content.FileProvider"
