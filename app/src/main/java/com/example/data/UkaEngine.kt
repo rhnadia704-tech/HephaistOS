@@ -1422,7 +1422,7 @@ object UkaEngine {
         }
     }
 
-    private fun formatFileSize(bytes: Long): String {
+    fun formatFileSize(bytes: Long): String {
         if (bytes <= 0) return "0 B"
         val kb = bytes / 1024.0
         val mb = kb / 1024.0

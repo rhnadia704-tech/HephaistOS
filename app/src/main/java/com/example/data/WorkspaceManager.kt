@@ -22,7 +22,8 @@ object WorkspaceManager {
         "Scripts",
         "Templates",
         "EXTRACT",
-        "SIGNER"
+        "SIGNER",
+        "Extensions"
     )
 
     fun getWorkspaceRoot(context: Context): File {
@@ -123,6 +124,134 @@ object WorkspaceManager {
         val dir = File(getSignerDir(context), "signed_roms")
         if (!dir.exists()) dir.mkdirs()
         return dir
+    }
+
+    fun getExtensionsDir(context: Context): File {
+        val dir = getSubDir(context, "Extensions")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    fun getTemplatesDir(context: Context): File {
+        val dir = getSubDir(context, "Templates")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    fun getAheTemplateDir(context: Context): File {
+        val dir = File(getTemplatesDir(context), "ahe_template")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    fun ensureAheStarterTemplate(context: Context): File {
+        val templateDir = getAheTemplateDir(context)
+        val binDir = File(templateDir, "bin").apply { mkdirs() }
+        val scriptsDir = File(templateDir, "scripts").apply { mkdirs() }
+        val toolsDir = File(templateDir, "tools").apply { mkdirs() }
+        val docsDir = File(templateDir, "docs").apply { mkdirs() }
+
+        val manifestFile = File(templateDir, "manifest.json")
+        if (!manifestFile.exists()) {
+            val manifestContent = """
+{
+  "id": "com.hephaistos.ext.starter",
+  "name": "Extension Modèle HephaistOS",
+  "version": "1.0.0",
+  "author": "HephaistOS Dev Community",
+  "description": "Template modèle officiel démontrant l'architecture d'extension .ahe, l'exécution native ARM64 et l'UI Material 3",
+  "minHephaistosVersion": 1,
+  "permissions": ["STORAGE", "ROOT", "EXEC_BIN"],
+  "exportedBinaries": ["starter_tool"],
+  "ui": {
+    "hasDedicatedPage": true,
+    "addToNavRail": false,
+    "tabs": [
+      {
+        "id": "tab_main",
+        "title": "Principal",
+        "icon": "Dashboard",
+        "sections": [
+          {
+            "type": "banner",
+            "title": "Module .ahe Opérationnel",
+            "subtitle": "Espace de travail connecté à /sdcard/HEPHAISTOS"
+          },
+          {
+            "type": "form",
+            "title": "Exécution d'Action Rapide",
+            "subtitle": "Test du pont d'environnement et de l'exécutable natif",
+            "fields": [
+              { "id": "target_name", "type": "text", "label": "Nom de la cible", "default": "Rom_Porting_Test" },
+              { "id": "action_mode", "type": "dropdown", "label": "Mode de Traitement", "default": "Inspection", "source": "unpacked_projects" }
+            ],
+            "action": {
+              "id": "run_starter",
+              "label": "Exécuter l'Outil Modèle",
+              "icon": "Bolt",
+              "script": "scripts/main.sh",
+              "requiresRoot": false
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "ipc": {
+    "supportedCommands": ["ping", "get_status", "run_diagnostics"],
+    "dependencies": []
+  }
+}
+            """.trimIndent()
+            manifestFile.writeText(manifestContent)
+        }
+
+        val scriptFile = File(scriptsDir, "main.sh")
+        if (!scriptFile.exists()) {
+            val scriptContent = """
+#!/system/bin/sh
+# Script d'exemple exécuté par HephaistOS Extension Engine (.ahe)
+
+echo "[HEPHAISTOS AHE] Démarrage de l'action modèle..."
+echo "[ENV] Workspace racine : ${'$'}HEPHAISTOS_WORKSPACE"
+echo "[ENV] Dossier de l'extension : ${'$'}AHE_SELF_DIR"
+echo "[ENV] Paramètre target_name : ${'$'}AHE_INPUT_target_name"
+echo "[ENV] Paramètre action_mode : ${'$'}AHE_INPUT_action_mode"
+
+# Test du binaire natif inclus dans bin/
+if [ -x "${'$'}AHE_SELF_DIR/bin/starter_tool" ]; then
+    echo "[EXEC] Lancement de bin/starter_tool..."
+    "${'$'}AHE_SELF_DIR/bin/starter_tool" "${'$'}AHE_INPUT_target_name"
+else
+    echo "[INFO] Simulation du binaire d'inspection..."
+    echo "[SUCCESS] Analyse et diagnostic complétés avec succès !"
+fi
+
+echo "[FIN] Action .ahe terminée (code retour: 0)"
+exit 0
+            """.trimIndent()
+            scriptFile.writeText(scriptContent)
+            try { scriptFile.setExecutable(true) } catch (_: Exception) {}
+        }
+
+        val binTool = File(binDir, "starter_tool")
+        if (!binTool.exists()) {
+            val binScript = """
+#!/system/bin/sh
+echo "[BIN TOOL] Outil natif exécuté avec succès pour la cible: ${'$'}1"
+echo "[BIN TOOL] Espace /sdcard/HEPHAISTOS entièrement accessible."
+exit 0
+            """.trimIndent()
+            binTool.writeText(binScript)
+            try { binTool.setExecutable(true) } catch (_: Exception) {}
+        }
+
+        val readmeFile = File(docsDir, "README.md")
+        if (!readmeFile.exists()) {
+            readmeFile.writeText("# Extension Modèle HephaistOS (.ahe)\nConsultez DOC_AHE_EXTENSIONS.md pour les instructions complètes.")
+        }
+
+        return templateDir
     }
 
     fun listAvailableKeysets(context: Context): List<KeysetInfo> {

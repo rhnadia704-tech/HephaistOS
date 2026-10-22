@@ -1,115 +1,165 @@
-# Plan d'Implémentation Révisé — Module GEMEAU (Kitchen Signer & Trust Chain Engine)
+# Plan d'Implémentation Révisé — Module GEMO Réel & Écosystème d'Extensions .AHE
 
-Le module **GEMEAU** est une suite de cryptographie et de resignature pour HephaistOS, permettant de générer des trousseaux complets (Keysets AOSP + AVB), de signer des APKs individuels ou multiples, et d'exécuter une **resignature intelligente d'une Custom ROM ou d'un GSI**. 
-
-Il intègre une détection automatique des applications protégées (**GApps / Play Services**), dont les signatures sont rigoureusement préservées, ainsi qu'un **moteur de réplication 1:1 de la chaîne de confiance** qui cartographie le schéma de sécurité de l'OS d'origine pour le reproduire avec les nouvelles clés sans bootloop.
-
----
-
-## 1. Arborescence & Stockage Dédié
-
-Tous les fichiers seront structurés dans l'arborescence standardisée d'HephaistOS :
-- `/sdcard/HEPHAISTOS/SIGNER/` : Répertoire racine du module.
-- `/sdcard/HEPHAISTOS/SIGNER/KEYSET/<nom_keyset>/` : Trousseaux générés (`releasekey`, `platform`, `shared`, `media`, `networkstack`, `avb.pem`/`avb.pk8` et certificats `.x509.pem`).
-- `/sdcard/HEPHAISTOS/SIGNER/Data/` : Base de données factuelle et rapports de sécurité :
-  - `rom_trust_chain_analysis.json` (empreintes des clés d'origine, graphe de confiance, groupements `sharedUserId`)
-  - `gapps_preservation_manifest.json` (liste des APKs détectés comme GApps/externes dont la signature originale est préservée)
-  - `security_audit_report.md` (rapport lisible par l'utilisateur)
-- `/sdcard/HEPHAISTOS/SIGNER/signed_apks/` : Sortie des APKs signés unitairement ou par lot.
-- `/sdcard/HEPHAISTOS/SIGNER/signed_roms/` : Sortie des ROMs et images resignées (accompagnées de `vbmeta.img` si l'option est sélectionnée).
+Ce document définit les spécifications complètes et le plan de travail pour :
+1. **La correction intégrale de GEMO (Kitchen Signer & Trust Chain Engine)** pour traiter avec fidélité absolue tout fichier sans exception (images `.img` de toute taille, partitions brutes, sparse, EXT4, EROFS, F2FS, archives ZIP ou dossiers unpackés), en préservant l'intégralité des éléments critiques et liens symboliques, et en ne régénérant que les éléments strictement rendus caducs par le changement de signature.
+2. **Le système universel d'extensions modulaires `.ahe` (Android HephaistOS Extension)** opérant dans `/sdcard/HEPHAISTOS`, avec délégation totale des autorisations, interface Material 3 fidèle aux standards d'HephaistOS (avec possibilité d'apporter de nouveaux layouts, pages ou entrées de navigation), communication inter-extensions avancée, import par le tiroir Plus (+), et documentation GitHub avec template complet.
 
 ---
 
-## 2. Les 3 Pages de l'Interface GEMEAU
+## 1. Correction GEMO : Préservation Totale & Resignature Fidèle
 
-L'interface reprend à l'identique l'ergonomie M3 de `UnpackRepackScreen` et `ExtractorScreen` (bandeau supérieur avec statut, 3 onglets `SecondaryTabRow`, `HorizontalPager` et console temps réel auto-scrollable) :
+### Objectif
+Reproduire le reflet exact du fichier de base sans la moindre corruption ni fichier factice de 170 octets. Tous les éléments non impactés par la signature (binaires, HAL, bibliothèques `.so`, scripts init, liens symboliques, structures de dossiers, permissions POSIX et contextes SELinux) sont **conservés strictement à l'identique**. Seuls les éléments liés à la signature sont régénérés ou assainis.
 
-### Page 1 : Keymaker (Générateur de Keyset)
-- **Champs de configuration** :
-  - Nom du Keyset, Common Name (CN), Organisation (O), Unité d'organisation (OU), Pays (C).
-  - Algorithme cryptographique : RSA 2048, RSA 4096 ou EC P-256.
-  - Durée de validité (10 à 30 ans).
-- **Trousseau AOSP & AVB complet généré** :
-  - `releasekey` (signature globale système)
-  - `platform` (signature du framework Android, SystemUI, Settings)
-  - `shared` (processus partagés et synchronisation)
-  - `media` (applications et providers multimédia)
-  - `networkstack` (pile réseau et connectivité)
-  - `avb.pem` & `avb.pk8` (clé privée Android Verified Boot 2.0 pour la signature `vbmeta`)
-- Bouton : `GÉNÉRER LE KEYSET COMPLET`.
-- Liste des trousseaux existants dans `KEYSET/` avec empreintes SHA-256 et détails.
-
-### Page 2 : SIGNAPK (Signature Multi-APKs)
-- Explorateur de fichiers avec support de la **sélection multiple d'APKs**.
-- Liste des APKs sélectionnés avec badge de statut.
-- Bouton `SIGNER LES APKS`.
-- **Boîte de dialogue de sélection de clé** :
-  - Choix du keyset dans `KEYSET/`.
-  - Choix du rôle (`releasekey`, `platform`, `shared`, `media`).
-- Signature réelle (v1 JAR + v2/v3 APK Signature Scheme blocks) et export dans `signed_apks/`.
-
-### Page 3 : ROMsign (Resignature Intégrale de ROM & Réplication de Confiance)
-- Sélecteur de ROM, GSI ou partition `.img` (ZIP, EXT4, Sparse, Raw, payload).
-- Deux boutons d'action :
-  1. `SIGNER` (resignature complète de l'archive/image)
-  2. `SIGNER WITH VBMETA` (resignature complète + génération du fichier `vbmeta.img` signé avec la clé AVB et flags `disable-verity`)
-- **Popup de sélection du Keyset** à utiliser.
-- **Analyse Amont & Préservation Intelligente des GApps** :
-  - Détection heuristique des applications Google et services propriétaires (`com.google.*`, `com.android.vending`, Google Play Services, microG, DRM stubs).
-  - **Exclusion et préservation stricte** : ces applications conservent leur signature Google d'origine certifiée, évitant les crashs Play Services, Play Protect et SafetyNet.
-  - Sauvegarde du manifeste dans `/sdcard/HEPHAISTOS/SIGNER/Data/gapps_preservation_manifest.json`.
-- **Moteur de Réplication 1:1 de la Chaîne de Confiance** :
-  - Identification des certificats uniques signant les APKs système dans l'OS source.
-  - Association 1:1 : Chaque certificat d'origine est mappé vers son équivalent dans le nouveau Keyset (`Key_Source_1` ➔ `platform`, `Key_Source_2` ➔ `media`, etc.). Les applications partageant le même certificat d'origine continuent de partager la même clé.
-  - Régénération de `mac_permissions.xml` : Remplacement des anciennes signatures de certificats par les nouvelles signatures SHA-256 afin que les transitions SELinux (`platform`, `privapp`) restent fonctionnelles.
-  - Purge des caches dexopt pré-compilés (`.odex`, `.vdex`, `.oat`, `fsvmeta`) pour forcer l'OS à recompiler proprement les APKs resignés au premier démarrage.
-  - Si `SIGNER with vbmeta` : recalcul des descripteurs AVB et synthèse de `vbmeta.img`.
-- Console temps réel avec jauge de progression, compteur d'APKs traités / préservés et bouton pour afficher le rapport de sécurité.
+### Pipeline Détaillé
+1. **Inspection & Extraction Sans Perte** :
+   - Support des images `.img` (EXT4 sparse/raw, EROFS, F2FS), des ZIP de ROM ou des dossiers déjà extraits (`UNPACKED/`).
+   - Extraction via `UkaEngine.unpackSingleImage` en conservant l'index exact des permissions (`fs_config`), contextes SELinux (`file_contexts`) et liens symboliques (symlinks et hardlinks).
+2. **Analyse de Cohérence & Mappage de Confiance** :
+   - Scan exhaustif de tous les APKs présents dans toutes les partitions (`system`, `system_ext`, `product`, `vendor`, `apex`).
+   - **Détection et Préservation Stricte des GApps** : Identification des paquets Google et services critiques (`com.google.*`, Play Store, GMS Core, microG, DRM stubs). Ces applications conservent rigoureusement leur signature d'origine.
+   - Les APKs système propriétaires ou AOSP sont resignés avec les clés correspondantes du Keyset sélectionné.
+3. **Mise à Jour Ciblée des Éléments Dépendants de la Signature** :
+   - **SELinux MAC** : Mise à jour des signatures de certificats dans `mac_permissions.xml` (`<signer signature="...">`) pour garantir que les transitions SELinux de privilèges (`platform`, `privapp`) restent 100% valides sous le nouveau Keyset.
+   - **Purge Ciblée des Caches Incompatibles** : Suppression sélective des fichiers pré-compilés liés à l'ancienne signature (`.odex`, `.vdex`, `.oat`, `.art`, `.fsvmeta`) afin que le runtime Android (ART) recompile proprement les APKs modifiés au premier démarrage sans causer de bootloop.
+   - **Zéro Altération Collatérale** : Aucun fichier ELF `.so`, configuration `.rc` ou lien symbolique n'est touché ou supprimé s'il n'est pas lié à la signature.
+4. **Reconstruction (Repack) au Format Exact Source** :
+   - Détection automatique du système de fichiers source (EXT4, EROFS, F2FS) et de son mode (Sparse ou Raw).
+   - Appel de `UkaEngine.repackTarget` pour recréer l'image avec les mêmes blocs, mêmes tables `fs_config` et contextes.
+   - Si l'option `SIGNER with vbmeta` est activée : calcul des hachages de descripteurs de partition et création d'un `vbmeta.img` AVB 2.0 signé avec les clés du Keyset et flags de désactivation de la vérification.
+   - Sortie dans `/sdcard/HEPHAISTOS/SIGNER/signed_roms/<nom_base>_resigned.img` (taille réelle conforme au système de fichiers).
 
 ---
 
-## 3. Architecture Technique (`GemeauSignerEngine.kt`)
+## 2. Architecture des Extensions .AHE
 
-Création du composant cryptographique autonome `com.example.data.GemeauSignerEngine` :
-1. **Générateur Cryptographique JCA** :
-   - Génération des paires de clés RSA/EC et certificats auto-signés X.509 v3.
-   - Encodage PKCS#8 DER pour les clés privées `.pk8` et PEM pour les certificats `.x509.pem`.
-2. **Moteur de Signature APK v1/v2/v3** :
-   - Signature JAR v1 (`META-INF/MANIFEST.MF`, `CERT.SF`, `CERT.RSA`).
-   - Insertion du bloc d'authentification APK v2/v3 (ID `0x7109871a` / `0xf05368c0`) avec hachage Merkle Tree.
-3. **Moteur d'Audit & Mapping de Confiance** :
-   - Analyse des signatures existantes dans les APKs de la ROM.
-   - Détection des paquets protégés (`GAppsDetector`).
-   - Table de correspondance 1:1 entre clés sources et cibles.
-4. **Moteur de Transformation de ROM & AVB** :
-   - Remplacement et injection des APKs resignés.
-   - Mise à jour des balises `<signer signature="...">` dans `mac_permissions.xml`.
-   - Invalidation des fichiers `.odex`, `.vdex`, `.oat`.
-   - Synthèse de l'en-tête AVB 2.0 pour `vbmeta.img` avec flags `0x1` (Verification disabled).
+### Emplacement & Autorisations Déléguées
+- Espace de travail racine : `/sdcard/HEPHAISTOS/`.
+- Répertoire des extensions installées : `/sdcard/HEPHAISTOS/Extensions/<extension_id>/`.
+- HephaistOS délègue à chaque extension installée :
+  - L'accès complet en lecture/écriture à `/sdcard/HEPHAISTOS/` (UNPACKED, PACKED, EXTRACT, SIGNER, WORK, Data).
+  - L'accès aux droits Root (via `su` de `TerminalEngine`) si demandé dans le manifeste.
+  - L'exécution de binaires natifs ARM64/ARM32 et de scripts shell (`chmod +x` automatique).
+
+### Structure d'une Archive `.ahe`
+```
+nom_extension.ahe (Archive ZIP standard)
+├── manifest.json            # Configuration, métadonnées, layouts, actions, dépendances
+├── bin/                     # Binaires natifs compilés (ARM64-v8a / armeabi-v7a)
+├── scripts/                 # Scripts shell exécutables (.sh)
+├── tools/                   # Outils auxiliaires (jar, configs, patchs)
+├── docs/                    # Documentation interne
+│   └── README.md
+└── icon.png                 # (Optionnel) Icône de l'extension
+```
+
+### Manifeste `manifest.json` avec M3 Layouts
+Le manifeste permet de définir la structure visuelle Material 3 de l'extension :
+```json
+{
+  "id": "com.hephaistos.ext.supertool",
+  "name": "SuperTool",
+  "version": "1.0.0",
+  "author": "HephaistOS Dev",
+  "description": "Outil natif d'optimisation et d'analyse système",
+  "minHephaistosVersion": 1,
+  "permissions": ["ROOT", "STORAGE", "EXEC_BIN"],
+  "exportedBinaries": ["super_tool_arm64"],
+  "ui": {
+    "hasDedicatedPage": true,
+    "addToNavRail": false,
+    "tabs": [
+      {
+        "id": "tab_dashboard",
+        "title": "Tableau de Bord",
+        "icon": "Dashboard",
+        "sections": [
+          {
+            "type": "banner",
+            "title": "Optimiseur Système",
+            "subtitle": "Analyse et patch en temps réel"
+          },
+          {
+            "type": "form",
+            "fields": [
+              { "id": "target_project", "type": "dropdown", "label": "Projet Cible", "source": "unpacked_projects" },
+              { "id": "compression_level", "type": "number", "label": "Niveau de Compression", "default": "9" }
+            ],
+            "action": {
+              "id": "run_optimization",
+              "label": "Lancer l'Optimisation",
+              "icon": "Bolt",
+              "script": "scripts/optimize.sh",
+              "requiresRoot": true
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "ipc": {
+    "supportedCommands": ["optimize", "query_status"],
+    "dependencies": []
+  }
+}
+```
+
+### Communication Inter-Extensions (IPC) & `$PATH` Unifié
+1. **Registre des Extensions (`ExtensionManager.kt`)** :
+   - Compile en direct le `$PATH` global incluant `/sdcard/HEPHAISTOS/Extensions/*/bin/`.
+   - Fournit un script helper standard `ahe_call` injecté dans l'environnement :
+     `ahe_call <extension_id> <action_ou_binaire> [arguments...]`
+   - Injection de variables d'environnement dans chaque exécution :
+     - `$HEPHAISTOS_WORKSPACE=/sdcard/HEPHAISTOS`
+     - `$HEPHAISTOS_EXTENSIONS_DIR=/sdcard/HEPHAISTOS/Extensions`
+     - `$HEPHAISTOS_KEYSET_DIR=/sdcard/HEPHAISTOS/SIGNER/KEYSET`
+     - `$AHE_SELF_DIR=/sdcard/HEPHAISTOS/Extensions/<current_id>`
+2. **Bus de Partage d'Outils** :
+   - Une extension peut invoquer les binaires d'une autre extension présente sur le système sans duplication.
 
 ---
 
-## 4. Intégration dans l'Application HephaistOS
+## 3. Interface Utilisateur dans le Tiroir Plus (+) & Navigation
 
-1. **`Models.kt`** :
-   - Ajout de `Screen.GEMEAU("Géméau")`.
-   - Modèles : `KeysetInfo`, `ApkSignTarget`, `RomSignTarget`, `GemeauUiState`, `TrustChainReport`.
-2. **`WorkspaceManager.kt`** :
-   - Création des répertoires `SIGNER/KEYSET`, `SIGNER/Data`, `SIGNER/signed_apks`, `SIGNER/signed_roms`.
-3. **`HephaistViewModel.kt`** :
-   - État réactif `gemeauUiState`.
-   - Actions : `generateKeyset()`, `signApks()`, `analyzeAndSignRom()`, `refreshKeysets()`.
-4. **`GemeauScreen.kt`** :
-   - Écran Compose à 3 onglets (Keymaker, SIGNAPK, ROMsign) avec modals de choix de clés, rapport de confiance et console live.
-5. **`HomeScreen.kt` & `HephaistNavRail.kt`** :
-   - Carte rapide `GemeauQuickCard` sur l'écran d'accueil à la suite d'Unpack/Repack et Extractor.
-   - Entrée dédiée dans la barre de navigation latérale.
-6. **`MainActivity.kt`** :
-   - Routage de `Screen.GEMEAU`.
+1. **Bouton d'Importation `.ahe`** :
+   - Un bouton principal "+ Importer une Extension (.ahe)" ouvre le sélecteur de documents Android (`.ahe`, `.zip`).
+   - Modal d'installation affichant le détail du paquet, la compatibilité et les permissions sollicitées.
+   - Extraction instantanée et assignation des droits d'exécution.
+2. **Gestionnaire d'Extensions** :
+   - Liste des extensions installées avec carte Material 3 :
+     - Icône, Nom, Version, Auteur.
+     - Bouton "Ouvrir l'Interface" (affiche l'interface dynamique complète conforme au style M3 d'HephaistOS avec onglets et console live).
+     - Bouton "Désinstaller".
+3. **Lecteur de Documentation Intégré** :
+   - Bouton d'accès direct à la documentation de création des extensions, avec visionneuse Markdown intégrée.
 
 ---
 
-## 5. Vérification & Tests
-- Compilation complète avec `compile_applet`.
-- Exécution des tests unitaires `gradle :app:testDebugUnitTest`.
-- Validation de la préservation des GApps et de la réplication 1:1 des certificats.
+## 4. Documentation GitHub & Template Prêt à l'Emploi
+
+1. **`DOC_AHE_EXTENSIONS.md`** (fichier markdown complet à la racine du projet prêt pour GitHub) :
+   - Guide d'architecture exhaustif.
+   - Structure des répertoires et fichiers du format `.ahe`.
+   - Spécification du `manifest.json` (déclaration d'onglets, champs, actions, hooks de navigation).
+   - Guide de compilation croisée de binaires ARM64 avec Android NDK (`aarch64-linux-android-clang`).
+   - Bonnes pratiques pour l'interopérabilité (scripts bash compatibles toybox/busybox, IPC `ahe_call`).
+2. **Template Modèle dans `/sdcard/HEPHAISTOS/Templates/ahe_template/`** :
+   - `manifest.json` complet avec commentaires explicatifs.
+   - `scripts/sample_action.sh` avec gestion des variables HephaistOS et codes de retour.
+   - `bin/sample_tool` (script binaire d'exemple avec autorisations).
+   - `README.md` d'explication.
+
+---
+
+## 5. Calendrier d'Exécution
+
+- [x] **Phase 1** : Clarification des exigences avec l'utilisateur.
+- [ ] **Phase 2** : Refonte de `GemeauSignerEngine.kt` :
+  - Extraction fidèle `.img` et détection de structure avec `UkaEngine`.
+  - Mappage 1:1 de confiance, préservation stricte des GApps, mise à jour `mac_permissions.xml`, invalidation propre des odex/vdex/oat/fsvmeta.
+  - Repack sans perte reproduisant le format exact du fichier source.
+- [ ] **Phase 3** : Création du moteur d'extensions `ExtensionManager.kt` et des modèles `AheManifest`, `AheExtension`, `AheUiTab`, `AheField`, etc.
+- [ ] **Phase 4** : Interface Material 3 du tiroir Plus (`PlusDrawer.kt`) et rendu dynamique d'écran d'extension (`AheDynamicScreen.kt`).
+- [ ] **Phase 5** : Rédaction de `DOC_AHE_EXTENSIONS.md` et génération du template dans `/sdcard/HEPHAISTOS/Templates/ahe_template/`.
+- [ ] **Phase 6** : Raccordement dans `HephaistViewModel.kt` et `MainActivity.kt`.
+- [ ] **Phase 7** : Compilation et validation finale avec `compile_applet`.

@@ -68,6 +68,7 @@ import com.example.ui.components.BottomTerminalPanel
 import com.example.ui.components.HeavyTaskDialog
 import com.example.ui.components.HephaistNavRail
 import com.example.ui.components.PlusDrawer
+import com.example.ui.screens.AheDynamicScreen
 import com.example.ui.screens.ExtractorScreen
 import com.example.ui.screens.GemeauScreen
 import com.example.ui.screens.HomeScreen
@@ -393,6 +394,31 @@ class MainActivity : ComponentActivity() {
                                                 }
                                             )
 
+                                            Screen.AHE_EXTENSION -> {
+                                                val ext = uiState.aheUiState.activeExtension
+                                                if (ext != null) {
+                                                    AheDynamicScreen(
+                                                        extension = ext,
+                                                        availableProjects = uiState.extractorUiState.availableUnpackedProjects,
+                                                        availableKeysets = uiState.gemeauUiState.availableKeysets.map { it.name },
+                                                        isExecuting = uiState.aheUiState.isExecuting,
+                                                        currentStepText = uiState.aheUiState.currentStepText,
+                                                        progress = uiState.aheUiState.progress,
+                                                        logs = uiState.aheUiState.logs,
+                                                        onExecuteAction = { action, inputs ->
+                                                            viewModel.executeAheAction(context, ext, action, inputs)
+                                                        },
+                                                        onClearLogs = { viewModel.clearAheLogs() },
+                                                        onBack = { viewModel.selectScreen(Screen.HOME) },
+                                                        onUninstall = {
+                                                            viewModel.uninstallAheExtension(context, ext.manifest.id)
+                                                        }
+                                                    )
+                                                } else {
+                                                    viewModel.selectScreen(Screen.HOME)
+                                                }
+                                            }
+
                                             Screen.SETTINGS -> SettingsScreen(
                                                 currentTab = uiState.settingsTab,
                                                 themeMode = uiState.themeMode,
@@ -480,6 +506,16 @@ class MainActivity : ComponentActivity() {
                         PlusDrawer(
                             isOpen = uiState.isPlusDrawerOpen,
                             onClose = { viewModel.closePlusDrawer() },
+                            installedExtensions = uiState.aheUiState.installedExtensions,
+                            onImportAheStream = { stream ->
+                                viewModel.importAheExtension(context, stream)
+                            },
+                            onOpenExtension = { ext ->
+                                viewModel.openAheExtension(ext)
+                            },
+                            onUninstallExtension = { extId ->
+                                viewModel.uninstallAheExtension(context, extId)
+                            },
                             onAddScript = { name, content, isPy, reqRoot ->
                                 viewModel.addScript(name, content, isPy, reqRoot)
                             },

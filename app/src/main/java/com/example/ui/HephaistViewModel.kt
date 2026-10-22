@@ -41,7 +41,12 @@ import com.example.model.GemeauUiState
 import com.example.model.KeysetInfo
 import com.example.model.RepackUiState
 import com.example.model.UnpackUiState
+import com.example.data.ExtensionManager
+import com.example.model.AheAction
+import com.example.model.AheExtension
+import com.example.model.AheUiState
 import java.io.File
+import java.io.InputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -76,6 +81,7 @@ data class HephaistUiState(
     val repackUiState: RepackUiState = RepackUiState(),
     val extractorUiState: ExtractorUiState = ExtractorUiState(),
     val gemeauUiState: GemeauUiState = GemeauUiState(),
+    val aheUiState: AheUiState = AheUiState(),
     val snackbarMessage: String? = null
 )
 
@@ -132,6 +138,7 @@ class HephaistViewModel(application: Application) : AndroidViewModel(application
                         generatedPdfFile = readyPdf
                     )
                 }
+                refreshAheExtensions(app)
             }
         }
     }
@@ -1357,6 +1364,131 @@ class HephaistViewModel(application: Application) : AndroidViewModel(application
                 showSnackbar("ROM ${rom.name} resignée ! (${report.resignedApksCount} APKs resignés, ${report.preservedGappsCount} GApps préservés)")
             }
         }
+    }
+
+    fun refreshAheExtensions(context: Context) {
+        viewModelScope.launch(Dispatchers.IO) {
+            WorkspaceManager.ensureAheStarterTemplate(context)
+            val extensions = ExtensionManager.getInstalledExtensions(context)
+            withContext(Dispatchers.Main) {
+                _uiState.update { state ->
+                    state.copy(
+                        aheUiState = state.aheUiState.copy(
+                            installedExtensions = extensions
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    fun importAheExtension(context: Context, inputStream: InputStream) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(aheUiState = it.aheUiState.copy(isExecuting = true, currentStepText = "Importation du paquet .ahe...", progress = 0.1f)) }
+            logTerminal("[AHE] Début de l'importation d'une extension .ahe...")
+            val result = ExtensionManager.installExtensionFromStream(context, inputStream) { step, prog ->
+                _uiState.update { it.copy(aheUiState = it.aheUiState.copy(currentStepText = step, progress = prog)) }
+                logTerminal("[AHE] $step")
+            }
+            result.onSuccess { ext ->
+                logTerminal("[AHE] Extension installée avec succès : ${ext.manifest.name} (${ext.manifest.id})", isSuccess = true)
+                refreshAheExtensions(context)
+                _uiState.update { it.copy(
+                    aheUiState = it.aheUiState.copy(isExecuting = false, progress = 1f, currentStepText = "Extension prête"),
+                    snackbarMessage = "Extension '${ext.manifest.name}' installée avec succès !"
+                ) }
+            }.onFailure { err ->
+                logTerminal("[AHE ERREUR] Échec installation : ${err.message}", isError = true)
+                _uiState.update { it.copy(
+                    aheUiState = it.aheUiState.copy(isExecuting = false, currentStepText = "Erreur: ${err.message}"),
+                    snackbarMessage = "Erreur lors de l'installation de l'extension : ${err.message}"
+                ) }
+            }
+        }
+    }
+
+    fun uninstallAheExtension(context: Context, extensionId: String) {
+        viewModelScope.launch {
+            logTerminal("[AHE] Désinstallation de l'extension $extensionId...")
+            val success = ExtensionManager.uninstallExtension(context, extensionId)
+            if (success) {
+                logTerminal("[AHE] Extension $extensionId désinstallée avec succès.", isSuccess = true)
+                refreshAheExtensions(context)
+                _uiState.update { state ->
+                    state.copy(
+                        currentScreen = if (state.currentScreen == Screen.AHE_EXTENSION) Screen.HOME else state.currentScreen,
+                        snackbarMessage = "Extension désinstallée"
+                    )
+                }
+            }
+        }
+    }
+
+    fun openAheExtension(extension: AheExtension) {
+        _uiState.update { state ->
+            state.copy(
+                currentScreen = Screen.AHE_EXTENSION,
+                isPlusDrawerOpen = false,
+                aheUiState = state.aheUiState.copy(
+                    activeExtension = extension,
+                    currentStepText = "Prêt pour les actions",
+                    progress = 0f
+                )
+            )
+        }
+    }
+
+    fun executeAheAction(context: Context, extension: AheExtension, action: AheAction, inputs: Map<String, String>) {
+        viewModelScope.launch {
+            _uiState.update { state ->
+                state.copy(
+                    aheUiState = state.aheUiState.copy(
+                        isExecuting = true,
+                        currentStepText = "Exécution de ${action.label}...",
+                        progress = 0.2f
+                    )
+                )
+            }
+            logAheTerminal("──────────────────────────────────────────")
+            logAheTerminal("[AHE ACTION] Lancement de '${action.label}' (${action.id})")
+            logTerminal("[AHE] Lancement de '${action.label}' depuis l'extension ${extension.manifest.name}")
+
+            val code = ExtensionManager.executeAction(context, extension, action, inputs) { logLine ->
+                logAheTerminal(logLine)
+                logTerminal(logLine)
+            }
+
+            val success = code == 0
+            logAheTerminal("[AHE ACTION] Fin de l'action '${action.label}' (Code retour: $code)")
+            if (success) {
+                logAheTerminal("[SUCCÈS] Action exécutée avec succès !", isSuccess = true)
+            } else {
+                logAheTerminal("[ERREUR] Code de sortie: $code", isError = true)
+            }
+
+            _uiState.update { state ->
+                state.copy(
+                    aheUiState = state.aheUiState.copy(
+                        isExecuting = false,
+                        progress = if (success) 1f else 0f,
+                        currentStepText = if (success) "Action terminée avec succès" else "Erreur code $code"
+                    ),
+                    snackbarMessage = if (success) "Action '${action.label}' réussie !" else "Erreur lors de l'exécution (code: $code)"
+                )
+            }
+        }
+    }
+
+    fun logAheTerminal(text: String, isSuccess: Boolean = false, isError: Boolean = false) {
+        val entry = TerminalEntry(text = text, isSuccess = isSuccess, isError = isError)
+        _uiState.update { state ->
+            val updated = (state.aheUiState.logs + entry).takeLast(200)
+            state.copy(aheUiState = state.aheUiState.copy(logs = updated))
+        }
+    }
+
+    fun clearAheLogs() {
+        _uiState.update { it.copy(aheUiState = it.aheUiState.copy(logs = emptyList())) }
     }
 }
 

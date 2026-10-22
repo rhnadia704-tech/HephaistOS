@@ -5,6 +5,7 @@ enum class Screen(val title: String) {
     UNPACK_REPACK("Unpack / Repack"),
     EXTRACTOR("Extractor"),
     GEMEAU("Géméau"),
+    AHE_EXTENSION("Extension .ahe"),
     SETTINGS("Paramètres")
 }
 
@@ -171,7 +172,8 @@ data class RomTrustChainReport(
     val odexPurgedCount: Int,
     val hasVbmetaGenerated: Boolean,
     val dataDir: String,
-    val reportPath: String
+    val reportPath: String,
+    val signedRomPath: String = ""
 )
 
 enum class GemeauTab(val title: String) {
@@ -208,6 +210,82 @@ data class GemeauUiState(
     val lastGeneratedReportPath: String? = null,
     val lastGeneratedDataDir: String? = null,
     val lastSignedOutputPath: String? = null
+)
+
+data class AheField(
+    val id: String,
+    val type: String = "text", // "text", "number", "dropdown", "file_picker"
+    val label: String,
+    val default: String = "",
+    val source: String = "" // "unpacked_projects", "keysets", "files"
+)
+
+data class AheAction(
+    val id: String,
+    val label: String,
+    val icon: String = "Bolt",
+    val script: String,
+    val requiresRoot: Boolean = false,
+    val inputs: List<String> = emptyList()
+)
+
+data class AheSection(
+    val type: String = "form", // "banner", "form", "info", "actions"
+    val title: String = "",
+    val subtitle: String = "",
+    val fields: List<AheField> = emptyList(),
+    val action: AheAction? = null,
+    val actions: List<AheAction> = emptyList()
+)
+
+data class AheUiTab(
+    val id: String,
+    val title: String,
+    val icon: String = "Dashboard",
+    val sections: List<AheSection> = emptyList()
+)
+
+data class AheUiConfig(
+    val hasDedicatedPage: Boolean = true,
+    val addToNavRail: Boolean = false,
+    val tabs: List<AheUiTab> = emptyList()
+)
+
+data class AheIpcConfig(
+    val supportedCommands: List<String> = emptyList(),
+    val dependencies: List<String> = emptyList()
+)
+
+data class AheManifest(
+    val id: String,
+    val name: String,
+    val version: String = "1.0.0",
+    val author: String = "HephaistOS Dev",
+    val description: String = "",
+    val minHephaistosVersion: Int = 1,
+    val permissions: List<String> = listOf("STORAGE"),
+    val exportedBinaries: List<String> = emptyList(),
+    val ui: AheUiConfig = AheUiConfig(),
+    val ipc: AheIpcConfig = AheIpcConfig()
+)
+
+data class AheExtension(
+    val manifest: AheManifest,
+    val installDir: java.io.File,
+    val iconFile: java.io.File? = null,
+    val isEnabled: Boolean = true,
+    val installDate: String = ""
+)
+
+data class AheUiState(
+    val installedExtensions: List<AheExtension> = emptyList(),
+    val activeExtension: AheExtension? = null,
+    val isExecuting: Boolean = false,
+    val currentStepText: String = "Prêt",
+    val progress: Float = 0f,
+    val logs: List<TerminalEntry> = emptyList(),
+    val formValues: Map<String, String> = emptyMap(),
+    val selectedTabId: String = ""
 )
 
 

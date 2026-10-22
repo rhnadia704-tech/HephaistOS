@@ -1,6 +1,6 @@
 {
-  "summary":  "Plan révisé pour GEMEAU : Intégration de la détection et préservation intelligente des GApps (com.google.*, GMS, Vending) conservant leurs signatures officielles, et réplication 1:1 de la chaîne de confiance de l'OS source (regroupement des certificats d'origine, projection sur le nouveau Keyset, mise à jour mac_permissions.xml et purge odex/vdex/oat).",
-  "updatedAt":  "2026-10-22T03:14:07.355989362Z",
+  "summary":  "Plan d'implémentation révisé :\n1. Correction intégrale du pipeline GEMO pour tout fichier et image .img : extraction fidèle préservant 100% des liens symboliques, permissions UID/GID et contextes SELinux (fs_config), analyse de cohérence 1:1, resignature intelligente avec préservation absolue des GApps, mise à jour des signatures mac_permissions.xml, régénération/purge ciblée des seuls éléments invalidés par la signature (odex, vdex, oat, fsvmeta), et repack au format exact d'origine via UkaEngine.\n2. Architecture universelle d'Extensions .AHE opérant dans /sdcard/HEPHAISTOS : délégation complète des autorisations système/stockage/root, interface Material 3 déclarative identique à HephaistOS (support de sous-pages, onglets, rail de navigation, formulaires et console live), communication inter-extensions (PATH global partagé, RPC ahe_call, bus d'événements).\n3. Intégration dans le tiroir Plus (+) : import direct par sélecteur de fichiers, gestionnaire d'extensions visuel, exécution dynamique d'actions et visionneuse de documentation intégrée.\n4. Spécification GitHub complète (DOC_AHE_EXTENSIONS.md) et template prêt à l'emploi dans /sdcard/HEPHAISTOS/Templates/ahe_template/.",
+  "updatedAt":  "2026-10-22T07:40:52.581115600Z",
   "requestFeedback":  true,
   "userFacing":  true
 }
