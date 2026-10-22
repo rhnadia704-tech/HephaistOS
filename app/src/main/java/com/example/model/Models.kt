@@ -4,6 +4,7 @@ enum class Screen(val title: String) {
     HOME("Accueil"),
     UNPACK_REPACK("Unpack / Repack"),
     EXTRACTOR("Extractor"),
+    GEMEAU("Géméau"),
     SETTINGS("Paramètres")
 }
 
@@ -140,4 +141,73 @@ data class ExtractorUiState(
     val lastGeneratedReportPath: String? = null,
     val lastGeneratedDataDir: String? = null
 )
+
+data class KeysetInfo(
+    val name: String,
+    val dirPath: String,
+    val keyCount: Int,
+    val algorithm: String,
+    val creationDate: String,
+    val certFingerprints: Map<String, String> = emptyMap(),
+    val hasAvbKey: Boolean = false
+)
+
+data class ApkSignItem(
+    val file: java.io.File,
+    val name: String,
+    val size: Long,
+    val formattedSize: String,
+    val originalSigner: String = "Inconnu",
+    val isSigned: Boolean = false
+)
+
+data class RomTrustChainReport(
+    val romName: String,
+    val totalApks: Int,
+    val preservedGappsCount: Int,
+    val resignedApksCount: Int,
+    val distinctKeyClusters: Int,
+    val macPermissionsUpdated: Boolean,
+    val odexPurgedCount: Int,
+    val hasVbmetaGenerated: Boolean,
+    val dataDir: String,
+    val reportPath: String
+)
+
+enum class GemeauTab(val title: String) {
+    KEYMAKER("Keymaker"),
+    SIGNAPK("SIGNAPK"),
+    ROMSIGN("ROMsign")
+}
+
+data class GemeauUiState(
+    val isExecuting: Boolean = false,
+    val activeTab: GemeauTab = GemeauTab.KEYMAKER,
+    val availableKeysets: List<KeysetInfo> = emptyList(),
+    val selectedKeyset: KeysetInfo? = null,
+    // Page 1: Keymaker inputs
+    val newKeysetName: String = "HephaistOS_Keyset",
+    val commonName: String = "HephaistOS",
+    val organization: String = "Kitchen Community",
+    val countryCode: String = "FR",
+    val keyAlgorithm: String = "RSA 2048",
+    val validityYears: Int = 25,
+    // Page 2: SIGNAPK inputs
+    val selectedApks: List<ApkSignItem> = emptyList(),
+    val selectedKeyRoleForApk: String = "releasekey",
+    // Page 3: ROMsign inputs
+    val selectedRomFile: java.io.File? = null,
+    val generateVbmeta: Boolean = false,
+    // Execution Progress & Terminal
+    val progress: Float = 0f,
+    val currentStepText: String = "Prêt pour la signature",
+    val processedCount: Int = 0,
+    val totalItemsCount: Int = 0,
+    val preservedGappsCount: Int = 0,
+    val logs: List<TerminalEntry> = emptyList(),
+    val lastGeneratedReportPath: String? = null,
+    val lastGeneratedDataDir: String? = null,
+    val lastSignedOutputPath: String? = null
+)
+
 

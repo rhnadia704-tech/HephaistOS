@@ -2,6 +2,7 @@ package com.example.data
 
 import android.content.Context
 import android.os.Environment
+import com.example.model.KeysetInfo
 import java.io.File
 import java.io.FileOutputStream
 
@@ -20,7 +21,8 @@ object WorkspaceManager {
         "WebApps",
         "Scripts",
         "Templates",
-        "EXTRACT"
+        "EXTRACT",
+        "SIGNER"
     )
 
     fun getWorkspaceRoot(context: Context): File {
@@ -93,6 +95,71 @@ object WorkspaceManager {
         val gsiDir = File(extractDir, "gsi_analysis")
         if (!gsiDir.exists()) gsiDir.mkdirs()
         return gsiDir
+    }
+
+    fun getSignerDir(context: Context): File {
+        return getSubDir(context, "SIGNER")
+    }
+
+    fun getSignerKeysetDir(context: Context): File {
+        val dir = File(getSignerDir(context), "KEYSET")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    fun getSignerDataDir(context: Context): File {
+        val dir = File(getSignerDir(context), "Data")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    fun getSignerSignedApksDir(context: Context): File {
+        val dir = File(getSignerDir(context), "signed_apks")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    fun getSignerSignedRomsDir(context: Context): File {
+        val dir = File(getSignerDir(context), "signed_roms")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    fun listAvailableKeysets(context: Context): List<KeysetInfo> {
+        val keysetBase = getSignerKeysetDir(context)
+        val dirs = keysetBase.listFiles { f -> f.isDirectory } ?: emptyArray()
+        val list = mutableListOf<KeysetInfo>()
+        for (d in dirs) {
+            val keyFiles = d.listFiles { f -> f.extension == "pk8" || f.extension == "pem" } ?: emptyArray()
+            val hasAvb = File(d, "avb.pk8").exists() || File(d, "avb.pem").exists()
+            val manifest = File(d, "keyset_manifest.json")
+            var alg = "RSA 2048"
+            var creation = "Récent"
+            val fingerprints = mutableMapOf<String, String>()
+            if (manifest.exists()) {
+                try {
+                    val json = org.json.JSONObject(manifest.readText())
+                    alg = json.optString("algorithm", "RSA 2048")
+                    creation = json.optString("creationDate", "Récent")
+                    val fpJson = json.optJSONObject("fingerprints")
+                    fpJson?.keys()?.forEach { k ->
+                        fingerprints[k] = fpJson.getString(k)
+                    }
+                } catch (_: Exception) {}
+            }
+            list.add(
+                KeysetInfo(
+                    name = d.name,
+                    dirPath = d.absolutePath,
+                    keyCount = keyFiles.size,
+                    algorithm = alg,
+                    creationDate = creation,
+                    certFingerprints = fingerprints,
+                    hasAvbKey = hasAvb
+                )
+            )
+        }
+        return list
     }
 
     fun listUnpackedProjects(context: Context): List<String> {

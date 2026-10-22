@@ -1,6 +1,6 @@
 {
-  "summary":  "Plan d'implémentation du nouveau module EXTRACTOR pour HephaistOS.\nCe module propose une interface identique à Unpack/Repack, avec un moteur d'extraction factuelle du téléphone actuel (blobs, HALs, framework, désassemblage des dépendances .so et XML) vers /sdcard/HEPHAISTOS/EXTRACT/, une base de connaissances dans EXTRACT/Data/, une sélection déroulante des projets dans UNPACKED, et un moteur d'analyse comparative approfondie des GSI/ROMs déballées pour le portage.",
-  "updatedAt":  "2026-10-21T18:16:20.439516019Z",
+  "summary":  "Plan révisé pour GEMEAU : Intégration de la détection et préservation intelligente des GApps (com.google.*, GMS, Vending) conservant leurs signatures officielles, et réplication 1:1 de la chaîne de confiance de l'OS source (regroupement des certificats d'origine, projection sur le nouveau Keyset, mise à jour mac_permissions.xml et purge odex/vdex/oat).",
+  "updatedAt":  "2026-10-22T03:14:07.355989362Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

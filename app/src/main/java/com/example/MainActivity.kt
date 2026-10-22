@@ -69,6 +69,7 @@ import com.example.ui.components.HeavyTaskDialog
 import com.example.ui.components.HephaistNavRail
 import com.example.ui.components.PlusDrawer
 import com.example.ui.screens.ExtractorScreen
+import com.example.ui.screens.GemeauScreen
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.screens.TerminalScreen
@@ -189,6 +190,8 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(uiState.currentScreen) {
                 if (uiState.currentScreen == Screen.EXTRACTOR) {
                     viewModel.refreshExtractorProjects(context)
+                } else if (uiState.currentScreen == Screen.GEMEAU) {
+                    viewModel.refreshKeysets(context)
                 }
             }
 
@@ -294,6 +297,9 @@ class MainActivity : ComponentActivity() {
                                                 onNavigateToExtractor = {
                                                     viewModel.selectScreen(Screen.EXTRACTOR)
                                                 },
+                                                onNavigateToGemeau = {
+                                                    viewModel.selectScreen(Screen.GEMEAU)
+                                                },
                                                 onRefresh = {
                                                     viewModel.refreshCompatibleApps(context)
                                                 }
@@ -344,6 +350,43 @@ class MainActivity : ComponentActivity() {
                                                 },
                                                 onNavigateToUnpackRepack = {
                                                     viewModel.selectScreen(Screen.UNPACK_REPACK)
+                                                },
+                                                onBackToHome = {
+                                                    viewModel.selectScreen(Screen.HOME)
+                                                }
+                                            )
+
+                                            Screen.GEMEAU -> GemeauScreen(
+                                                gemeauState = uiState.gemeauUiState,
+                                                onTabSelected = { tab ->
+                                                    viewModel.setGemeauTab(tab)
+                                                },
+                                                onRefreshKeysets = {
+                                                    viewModel.refreshKeysets(context)
+                                                },
+                                                onSelectKeyset = { keyset ->
+                                                    viewModel.selectKeyset(keyset)
+                                                },
+                                                onUpdateKeymakerForm = { name, cn, org, country, alg, years ->
+                                                    viewModel.updateGemeauKeymakerForm(name, cn, org, country, alg, years)
+                                                },
+                                                onGenerateKeyset = {
+                                                    viewModel.generateKeyset(context)
+                                                },
+                                                onSelectApks = { files ->
+                                                    viewModel.setSelectedApksForSign(files)
+                                                },
+                                                onSetKeyRoleForApk = { role ->
+                                                    viewModel.setKeyRoleForApk(role)
+                                                },
+                                                onSignApks = { keyset, role ->
+                                                    viewModel.signSelectedApks(context, keyset, role)
+                                                },
+                                                onSelectRomFile = { file ->
+                                                    viewModel.setSelectedRomFile(file)
+                                                },
+                                                onSignRom = { keyset, withVbmeta ->
+                                                    viewModel.analyzeAndSignRom(context, keyset, withVbmeta)
                                                 },
                                                 onBackToHome = {
                                                     viewModel.selectScreen(Screen.HOME)

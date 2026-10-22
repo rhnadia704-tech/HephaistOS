@@ -31,9 +31,14 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.example.data.ExtractorEngine
+import com.example.data.GemeauSignerEngine
 import com.example.data.UkaEngine
+import com.example.model.ApkSignItem
 import com.example.model.ExtractionMode
 import com.example.model.ExtractorUiState
+import com.example.model.GemeauTab
+import com.example.model.GemeauUiState
+import com.example.model.KeysetInfo
 import com.example.model.RepackUiState
 import com.example.model.UnpackUiState
 import java.io.File
@@ -70,6 +75,7 @@ data class HephaistUiState(
     val unpackUiState: UnpackUiState = UnpackUiState(),
     val repackUiState: RepackUiState = RepackUiState(),
     val extractorUiState: ExtractorUiState = ExtractorUiState(),
+    val gemeauUiState: GemeauUiState = GemeauUiState(),
     val snackbarMessage: String? = null
 )
 
@@ -1043,4 +1049,314 @@ class HephaistViewModel(application: Application) : AndroidViewModel(application
     fun dismissSnackbar() {
         _uiState.update { it.copy(snackbarMessage = null) }
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // GEMEAU MODULE ACTIONS
+    // ─────────────────────────────────────────────────────────────────────────
+    fun setGemeauTab(tab: GemeauTab) {
+        _uiState.update { it.copy(gemeauUiState = it.gemeauUiState.copy(activeTab = tab)) }
+    }
+
+    fun refreshKeysets(context: Context) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val keysets = WorkspaceManager.listAvailableKeysets(context)
+            withContext(Dispatchers.Main) {
+                _uiState.update { state ->
+                    val curSel = state.gemeauUiState.selectedKeyset
+                    val newSel = if (curSel != null && keysets.any { it.name == curSel.name }) {
+                        keysets.first { it.name == curSel.name }
+                    } else {
+                        keysets.firstOrNull()
+                    }
+                    state.copy(
+                        gemeauUiState = state.gemeauUiState.copy(
+                            availableKeysets = keysets,
+                            selectedKeyset = newSel
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    fun selectKeyset(keyset: KeysetInfo) {
+        _uiState.update {
+            it.copy(gemeauUiState = it.gemeauUiState.copy(selectedKeyset = keyset))
+        }
+    }
+
+    fun updateGemeauKeymakerForm(
+        name: String,
+        cn: String,
+        org: String,
+        country: String,
+        alg: String,
+        years: Int
+    ) {
+        _uiState.update {
+            it.copy(
+                gemeauUiState = it.gemeauUiState.copy(
+                    newKeysetName = name,
+                    commonName = cn,
+                    organization = org,
+                    countryCode = country,
+                    keyAlgorithm = alg,
+                    validityYears = years
+                )
+            )
+        }
+    }
+
+    fun generateKeyset(context: Context) {
+        val form = _uiState.value.gemeauUiState
+        if (form.isExecuting) return
+
+        _uiState.update {
+            it.copy(
+                gemeauUiState = it.gemeauUiState.copy(
+                    isExecuting = true,
+                    progress = 0.05f,
+                    currentStepText = "Initialisation de la génération du keyset...",
+                    logs = listOf(TerminalEntry("[KEYMAKER] Démarrage du générateur cryptographique AOSP/AVB..."))
+                )
+            )
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val newKeyset = GemeauSignerEngine.generateKeyset(
+                    context = context,
+                    keysetName = form.newKeysetName,
+                    commonName = form.commonName,
+                    organization = form.organization,
+                    countryCode = form.countryCode,
+                    algorithm = form.keyAlgorithm,
+                    validityYears = form.validityYears,
+                    onProgress = { step, percent ->
+                        _uiState.update {
+                            it.copy(
+                                gemeauUiState = it.gemeauUiState.copy(
+                                    currentStepText = step,
+                                    progress = percent
+                                )
+                            )
+                        }
+                    },
+                    onLog = { line ->
+                        val isSuccess = line.contains("[SUCCÈS]") || line.contains("[TERMINÉ]")
+                        val isError = line.contains("[ERREUR]")
+                        _uiState.update {
+                            it.copy(
+                                gemeauUiState = it.gemeauUiState.copy(
+                                    logs = (it.gemeauUiState.logs + TerminalEntry(line, isError = isError, isSuccess = isSuccess)).takeLast(250)
+                                )
+                            )
+                        }
+                    }
+                )
+
+                val updatedKeysets = WorkspaceManager.listAvailableKeysets(context)
+                withContext(Dispatchers.Main) {
+                    _uiState.update {
+                        it.copy(
+                            gemeauUiState = it.gemeauUiState.copy(
+                                isExecuting = false,
+                                progress = 1.0f,
+                                currentStepText = "Keyset '${newKeyset.name}' généré avec succès !",
+                                availableKeysets = updatedKeysets,
+                                selectedKeyset = newKeyset
+                            )
+                        )
+                    }
+                    showSnackbar("Trousseau '${newKeyset.name}' (6 clés AOSP/AVB) généré !")
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    _uiState.update {
+                        it.copy(
+                            gemeauUiState = it.gemeauUiState.copy(
+                                isExecuting = false,
+                                currentStepText = "Erreur : ${e.message}",
+                                logs = it.gemeauUiState.logs + TerminalEntry("[ERREUR] Échec : ${e.message}", isError = true)
+                            )
+                        )
+                    }
+                    showSnackbar("Erreur lors de la création du keyset: ${e.message}")
+                }
+            }
+        }
+    }
+
+    fun setSelectedApksForSign(files: List<File>) {
+        val items = files.map { f ->
+            val sizeMb = "%.2f Mo".format(f.length() / 1048576.0)
+            ApkSignItem(
+                file = f,
+                name = f.name,
+                size = f.length(),
+                formattedSize = sizeMb,
+                originalSigner = "Non vérifié",
+                isSigned = false
+            )
+        }
+        _uiState.update {
+            it.copy(gemeauUiState = it.gemeauUiState.copy(selectedApks = items))
+        }
+    }
+
+    fun setKeyRoleForApk(role: String) {
+        _uiState.update {
+            it.copy(gemeauUiState = it.gemeauUiState.copy(selectedKeyRoleForApk = role))
+        }
+    }
+
+    fun signSelectedApks(context: Context, keyset: KeysetInfo, role: String) {
+        val apks = _uiState.value.gemeauUiState.selectedApks
+        if (apks.isEmpty()) {
+            showSnackbar("Veuillez sélectionner au moins un APK à signer.")
+            return
+        }
+        if (_uiState.value.gemeauUiState.isExecuting) return
+
+        _uiState.update {
+            it.copy(
+                gemeauUiState = it.gemeauUiState.copy(
+                    isExecuting = true,
+                    progress = 0.05f,
+                    currentStepText = "Signature de ${apks.size} APKs en cours...",
+                    processedCount = 0,
+                    totalItemsCount = apks.size,
+                    logs = listOf(TerminalEntry("[SIGNAPK] Lancement de la signature de ${apks.size} APK(s)..."))
+                )
+            )
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val signed = GemeauSignerEngine.signMultipleApks(
+                context = context,
+                apks = apks.map { it.file },
+                keysetDir = File(keyset.dirPath),
+                keyRole = role,
+                onProgress = { step, percent, index ->
+                    _uiState.update {
+                        it.copy(
+                            gemeauUiState = it.gemeauUiState.copy(
+                                currentStepText = step,
+                                progress = percent,
+                                processedCount = index
+                            )
+                        )
+                    }
+                },
+                onLog = { line ->
+                    val isSuccess = line.contains("[SUCCÈS]")
+                    val isError = line.contains("[ERREUR]")
+                    _uiState.update {
+                        it.copy(
+                            gemeauUiState = it.gemeauUiState.copy(
+                                logs = (it.gemeauUiState.logs + TerminalEntry(line, isError = isError, isSuccess = isSuccess)).takeLast(250)
+                            )
+                        )
+                    }
+                }
+            )
+
+            withContext(Dispatchers.Main) {
+                _uiState.update {
+                    it.copy(
+                        gemeauUiState = it.gemeauUiState.copy(
+                            isExecuting = false,
+                            progress = 1.0f,
+                            currentStepText = "${signed.size} APK(s) signés avec succès !",
+                            lastSignedOutputPath = WorkspaceManager.getSignerSignedApksDir(context).absolutePath
+                        )
+                    )
+                }
+                showSnackbar("${signed.size} APK(s) signés avec la clé '$role' !")
+            }
+        }
+    }
+
+    fun setSelectedRomFile(file: File?) {
+        _uiState.update {
+            it.copy(gemeauUiState = it.gemeauUiState.copy(selectedRomFile = file))
+        }
+    }
+
+    fun setGenerateVbmeta(enable: Boolean) {
+        _uiState.update {
+            it.copy(gemeauUiState = it.gemeauUiState.copy(generateVbmeta = enable))
+        }
+    }
+
+    fun analyzeAndSignRom(context: Context, keyset: KeysetInfo, withVbmeta: Boolean) {
+        val rom = _uiState.value.gemeauUiState.selectedRomFile
+        if (rom == null) {
+            showSnackbar("Veuillez choisir un fichier ROM, GSI ou partition à signer.")
+            return
+        }
+        if (_uiState.value.gemeauUiState.isExecuting) return
+
+        _uiState.update {
+            it.copy(
+                gemeauUiState = it.gemeauUiState.copy(
+                    isExecuting = true,
+                    progress = 0.05f,
+                    currentStepText = "Audit et analyse de la ROM ${rom.name}...",
+                    processedCount = 0,
+                    logs = listOf(TerminalEntry("[ROMSIGN] Initialisation de l'audit et de la chaîne de confiance..."))
+                )
+            )
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val report = GemeauSignerEngine.analyzeAndSignRom(
+                context = context,
+                romFile = rom,
+                keysetDir = File(keyset.dirPath),
+                withVbmeta = withVbmeta,
+                onProgress = { step, percent, processed, total ->
+                    _uiState.update {
+                        it.copy(
+                            gemeauUiState = it.gemeauUiState.copy(
+                                currentStepText = step,
+                                progress = percent,
+                                processedCount = processed,
+                                totalItemsCount = total
+                            )
+                        )
+                    }
+                },
+                onLog = { line ->
+                    val isSuccess = line.contains("[SUCCÈS]") || line.contains("[PRÉSERVATION]")
+                    val isError = line.contains("[ERREUR]")
+                    _uiState.update {
+                        it.copy(
+                            gemeauUiState = it.gemeauUiState.copy(
+                                logs = (it.gemeauUiState.logs + TerminalEntry(line, isError = isError, isSuccess = isSuccess)).takeLast(250)
+                            )
+                        )
+                    }
+                }
+            )
+
+            withContext(Dispatchers.Main) {
+                _uiState.update {
+                    it.copy(
+                        gemeauUiState = it.gemeauUiState.copy(
+                            isExecuting = false,
+                            progress = 1.0f,
+                            currentStepText = "ROM resignée avec préservation GApps et réplication de confiance !",
+                            preservedGappsCount = report.preservedGappsCount,
+                            lastGeneratedReportPath = report.reportPath,
+                            lastGeneratedDataDir = report.dataDir,
+                            lastSignedOutputPath = WorkspaceManager.getSignerSignedRomsDir(context).absolutePath
+                        )
+                    )
+                }
+                showSnackbar("ROM ${rom.name} resignée ! (${report.resignedApksCount} APKs resignés, ${report.preservedGappsCount} GApps préservés)")
+            }
+        }
+    }
 }
+
