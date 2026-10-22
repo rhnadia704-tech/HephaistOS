@@ -282,6 +282,7 @@ class MainActivity : ComponentActivity() {
                                         when (screen) {
                                             Screen.HOME -> HomeScreen(
                                                 compatibleApps = uiState.compatibleApps,
+                                                installedExtensions = uiState.aheUiState.installedExtensions,
                                                 railState = uiState.railState,
                                                 onToggleRailFullscreen = {
                                                     viewModel.toggleRailFullscreen()
@@ -300,6 +301,12 @@ class MainActivity : ComponentActivity() {
                                                 },
                                                 onNavigateToGemeau = {
                                                     viewModel.selectScreen(Screen.GEMEAU)
+                                                },
+                                                onOpenExtension = { ext ->
+                                                    viewModel.openAheExtension(ext)
+                                                },
+                                                onOpenPlusDrawer = {
+                                                    viewModel.openPlusDrawer()
                                                 },
                                                 onRefresh = {
                                                     viewModel.refreshCompatibleApps(context)
@@ -409,6 +416,9 @@ class MainActivity : ComponentActivity() {
                                                             viewModel.executeAheAction(context, ext, action, inputs)
                                                         },
                                                         onClearLogs = { viewModel.clearAheLogs() },
+                                                        onOpenGlobalTerminal = {
+                                                            viewModel.openBottomTerminal()
+                                                        },
                                                         onBack = { viewModel.selectScreen(Screen.HOME) },
                                                         onUninstall = {
                                                             viewModel.uninstallAheExtension(context, ext.manifest.id)

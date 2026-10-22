@@ -99,6 +99,7 @@ fun AheDynamicScreen(
     onClearLogs: () -> Unit,
     onBack: () -> Unit,
     onUninstall: () -> Unit,
+    onOpenGlobalTerminal: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     BackHandler { onBack() }
@@ -168,6 +169,16 @@ fun AheDynamicScreen(
                     text = "v${extension.manifest.version} • Par ${extension.manifest.author}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            IconButton(
+                onClick = onOpenGlobalTerminal,
+                modifier = Modifier.testTag("ahe_open_global_terminal_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Terminal,
+                    contentDescription = "Ouvrir le Terminal Global",
+                    tint = MaterialTheme.colorScheme.primary
                 )
             }
             IconButton(

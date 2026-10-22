@@ -199,6 +199,10 @@ class HephaistViewModel(application: Application) : AndroidViewModel(application
         _uiState.update { it.copy(isPlusDrawerOpen = !it.isPlusDrawerOpen) }
     }
 
+    fun openPlusDrawer() {
+        _uiState.update { it.copy(isPlusDrawerOpen = true) }
+    }
+
     fun closePlusDrawer() {
         _uiState.update { it.copy(isPlusDrawerOpen = false) }
     }
