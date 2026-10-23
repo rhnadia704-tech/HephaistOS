@@ -396,6 +396,33 @@ class MainActivity : ComponentActivity() {
                                                 onSignRom = { keyset, withVbmeta ->
                                                     viewModel.analyzeAndSignRom(context, keyset, withVbmeta)
                                                 },
+                                                onSelectVerifySubTab = { subTab ->
+                                                    viewModel.selectGemeauVerifySubTab(subTab)
+                                                },
+                                                onSelectApksForVerification = { files ->
+                                                    viewModel.setSelectedApksForVerification(files)
+                                                },
+                                                onSelectRomForApkExtraction = { file ->
+                                                    viewModel.setSelectedRomForApkExtraction(file)
+                                                },
+                                                onExtractApksFromRom = {
+                                                    viewModel.extractApksFromSelectedRom(context)
+                                                },
+                                                onVerifyApks = {
+                                                    viewModel.verifySelectedApks(context)
+                                                },
+                                                onSelectRomForAudit = { file ->
+                                                    viewModel.setSelectedRomForAudit(file)
+                                                },
+                                                onAuditRom = {
+                                                    viewModel.auditSelectedRom(context)
+                                                },
+                                                onNavigateSubScreen = { sub ->
+                                                    viewModel.setGemeauSubScreen(sub)
+                                                },
+                                                onNavigateBackInGemeau = {
+                                                    viewModel.navigateBackInGemeau()
+                                                },
                                                 onBackToHome = {
                                                     viewModel.selectScreen(Screen.HOME)
                                                 }

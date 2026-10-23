@@ -1,6 +1,6 @@
 {
-  "summary":  "Plan d'implémentation pour :\n1. Affichage des extensions .ahe sur la page d'accueil d'HephaistOS (Section dédiée avec cartes interactives modernes, statut, lancement rapide et gestion).\n2. Bouton d'accès et lien direct vers la documentation GitHub des extensions .ahe sur la page d'accueil et visionneuse in-app complète.\n3. Intégration du terminal global d'HephaistOS au sein de toutes les extensions .ahe (bouton d'ouverture du terminal inférieur extensible depuis AheDynamicScreen).\n4. Super-Moteur d'Extensions .AHE de niveau souverain (HephaistOS Ultimate SDK) : binaire CLI hephaistos_api + bibliothèque hephaistos_sdk.sh permettant de contrôler Unpack, Repack, Géméau, Extractor, injection LD_LIBRARY_PATH pour lib64/ et binaires natifs ultra-performants surpassant les outils AOSP.",
-  "updatedAt":  "2026-10-22T08:22:56.079461497Z",
+  "summary":  "Plan révisé : détection positive standardisée des satellites AI Studio via le contrat Manifest (meta-data hephaistos.satellite et intent-filter org.hephaistos.action.SATELLITE) sans liste noire, consignation dans la Bible des templates, simplification des cartes GÉMÉAU (icône et nom uniquement) et affichage direct des satellites sur l'accueil.",
+  "updatedAt":  "2026-10-23T18:28:13.701596936Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

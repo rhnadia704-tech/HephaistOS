@@ -43,10 +43,17 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.VpnKey
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.VerifiedUser
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -80,13 +87,19 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.ApkSignItem
+import com.example.model.ApkVerificationDetail
+import com.example.model.GemeauSubScreen
 import com.example.model.GemeauTab
 import com.example.model.GemeauUiState
+import com.example.model.GemeauVerifySubTab
 import com.example.model.KeysetInfo
+import com.example.model.RomVerificationAudit
 import com.example.model.TerminalEntry
 import com.example.ui.components.InternalFilePickerDialog
 import kotlinx.coroutines.launch
@@ -106,18 +119,34 @@ fun GemeauScreen(
     onSignApks: (KeysetInfo, String) -> Unit,
     onSelectRomFile: (File?) -> Unit,
     onSignRom: (KeysetInfo, Boolean) -> Unit,
+    onSelectVerifySubTab: (GemeauVerifySubTab) -> Unit = {},
+    onSelectApksForVerification: (List<File>) -> Unit = {},
+    onSelectRomForApkExtraction: (File?) -> Unit = {},
+    onExtractApksFromRom: () -> Unit = {},
+    onVerifyApks: () -> Unit = {},
+    onSelectRomForAudit: (File?) -> Unit = {},
+    onAuditRom: () -> Unit = {},
+    onNavigateSubScreen: (GemeauSubScreen) -> Unit = {},
+    onNavigateBackInGemeau: () -> Unit = {},
     onBackToHome: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     BackHandler {
-        onBackToHome()
+        if (gemeauState.currentSubScreen == GemeauSubScreen.HUB) {
+            onBackToHome()
+        } else {
+            onNavigateBackInGemeau()
+        }
     }
 
     val coroutineScope = rememberCoroutineScope()
-    val pagerState = rememberPagerState(pageCount = { 3 })
 
     var showApkFilePicker by remember { mutableStateOf(false) }
     var showRomFilePicker by remember { mutableStateOf(false) }
+
+    var showVerifyApkFilePicker by remember { mutableStateOf(false) }
+    var showVerifyRomExtractPicker by remember { mutableStateOf(false) }
+    var showVerifyRomAuditPicker by remember { mutableStateOf(false) }
 
     var showChooseKeyDialogForApk by remember { mutableStateOf(false) }
     var showChooseKeyDialogForRom by remember { mutableStateOf(false) }
@@ -127,16 +156,24 @@ fun GemeauScreen(
     var reportDialogContent by remember { mutableStateOf("") }
     var reportDialogTitle by remember { mutableStateOf("") }
 
-    val tabTitles = listOf("1. Keymaker", "2. SIGNAPK", "3. ROMsign")
+    val topTitle = when (gemeauState.currentSubScreen) {
+        GemeauSubScreen.HUB -> "GÉMEAU"
+        GemeauSubScreen.KEYMAKER -> "GÉMEAU > Keymaker"
+        GemeauSubScreen.SIGNAPK -> "GÉMEAU > SIGNAPK"
+        GemeauSubScreen.ROMSIGN -> "GÉMEAU > ROMsign"
+        GemeauSubScreen.VERIFICATION_HUB -> "GÉMEAU > VÉRIFICATION"
+        GemeauSubScreen.VERIFY_APP -> "Vérification des Applications (APKs)"
+        GemeauSubScreen.VERIFY_ROM -> "Audit de ROM Complète"
+    }
 
-    // Synchronize tab index with pager state
-    LaunchedEffect(pagerState.currentPage) {
-        val tab = when (pagerState.currentPage) {
-            0 -> GemeauTab.KEYMAKER
-            1 -> GemeauTab.SIGNAPK
-            else -> GemeauTab.ROMSIGN
-        }
-        onTabSelected(tab)
+    val topSubtitle = when (gemeauState.currentSubScreen) {
+        GemeauSubScreen.HUB -> "Atelier Cryptographique, Signatures & Audits de ROMs"
+        GemeauSubScreen.KEYMAKER -> "Générateur de clés AOSP, AVB et certificats X.509"
+        GemeauSubScreen.SIGNAPK -> "Signature unitaire et par lots d'APKs"
+        GemeauSubScreen.ROMSIGN -> "Resignature globale de ROMs, GSIs et alignement SELinux"
+        GemeauSubScreen.VERIFICATION_HUB -> "Choisissez le mode d'audit cryptographique"
+        GemeauSubScreen.VERIFY_APP -> "Audit des schémas v1, v2, v3, v4 et certificats"
+        GemeauSubScreen.VERIFY_ROM -> "Audit de la chaîne de confiance et de mac_permissions.xml"
     }
 
     Column(
@@ -146,7 +183,7 @@ fun GemeauScreen(
             .statusBarsPadding()
             .navigationBarsPadding()
     ) {
-        // Top Bar — Matching Unpack/Repack and Extractor design language
+        // Top Bar
         Surface(
             modifier = Modifier.fillMaxWidth(),
             color = MaterialTheme.colorScheme.surface,
@@ -159,12 +196,18 @@ fun GemeauScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(
-                    onClick = onBackToHome,
+                    onClick = {
+                        if (gemeauState.currentSubScreen == GemeauSubScreen.HUB) {
+                            onBackToHome()
+                        } else {
+                            onNavigateBackInGemeau()
+                        }
+                    },
                     modifier = Modifier.testTag("gemeau_back_btn")
                 ) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Retour à l'accueil"
+                        contentDescription = "Retour"
                     )
                 }
 
@@ -178,7 +221,13 @@ fun GemeauScreen(
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
-                        imageVector = Icons.Default.VpnKey,
+                        imageVector = when (gemeauState.currentSubScreen) {
+                            GemeauSubScreen.HUB -> Icons.Default.VpnKey
+                            GemeauSubScreen.KEYMAKER -> Icons.Default.Key
+                            GemeauSubScreen.SIGNAPK -> Icons.Default.Layers
+                            GemeauSubScreen.ROMSIGN -> Icons.Default.Build
+                            else -> Icons.Default.VerifiedUser
+                        },
                         contentDescription = "GEMEAU",
                         tint = MaterialTheme.colorScheme.onPrimaryContainer,
                         modifier = Modifier.size(20.dp)
@@ -190,10 +239,12 @@ fun GemeauScreen(
                 Column(modifier = Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = "GÉMEAU",
+                            text = topTitle,
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Surface(
@@ -210,7 +261,7 @@ fun GemeauScreen(
                         }
                     }
                     Text(
-                        text = "Keysets AOSP, Signature Multi-APKs & Resignature de ROMs",
+                        text = topSubtitle,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -220,93 +271,121 @@ fun GemeauScreen(
             }
         }
 
-        // SecondaryTabRow (M3) — 3 Pages
-        SecondaryTabRow(
-            selectedTabIndex = pagerState.currentPage,
-            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            tabTitles.forEachIndexed { index, title ->
-                Tab(
-                    selected = pagerState.currentPage == index,
-                    onClick = {
-                        coroutineScope.launch {
-                            pagerState.animateScrollToPage(index)
-                        }
-                    },
-                    text = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = when (index) {
-                                    0 -> Icons.Default.Key
-                                    1 -> Icons.Default.Layers
-                                    else -> Icons.Default.Security
-                                },
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = title,
-                                fontWeight = if (pagerState.currentPage == index) FontWeight.Bold else FontWeight.Medium
-                            )
-                        }
-                    },
-                    modifier = Modifier.testTag("gemeau_tab_$index")
-                )
-            }
-        }
-
-        // Horizontal Pager for 3 Pages
-        HorizontalPager(
-            state = pagerState,
+        // Main SubScreen Router
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
-        ) { page ->
-            when (page) {
-                0 -> KeymakerPage(
-                    state = gemeauState,
-                    onUpdateForm = onUpdateKeymakerForm,
-                    onGenerateKeyset = onGenerateKeyset,
-                    onRefreshKeysets = onRefreshKeysets,
-                    onSelectKeyset = onSelectKeyset
-                )
-                1 -> SignApkPage(
-                    state = gemeauState,
-                    onBrowseClick = { showApkFilePicker = true },
-                    onStartSignClick = {
-                        if (gemeauState.availableKeysets.isEmpty()) {
-                            onRefreshKeysets()
+        ) {
+            when (gemeauState.currentSubScreen) {
+                GemeauSubScreen.HUB -> {
+                    GemeauHubView(
+                        state = gemeauState,
+                        onOpenFeature = onNavigateSubScreen
+                    )
+                }
+                GemeauSubScreen.KEYMAKER -> {
+                    KeymakerPage(
+                        state = gemeauState,
+                        onUpdateForm = onUpdateKeymakerForm,
+                        onGenerateKeyset = onGenerateKeyset,
+                        onRefreshKeysets = onRefreshKeysets,
+                        onSelectKeyset = onSelectKeyset
+                    )
+                }
+                GemeauSubScreen.SIGNAPK -> {
+                    SignApkPage(
+                        state = gemeauState,
+                        onBrowseClick = { showApkFilePicker = true },
+                        onStartSignClick = {
+                            if (gemeauState.availableKeysets.isEmpty()) {
+                                onRefreshKeysets()
+                            }
+                            showChooseKeyDialogForApk = true
                         }
-                        showChooseKeyDialogForApk = true
-                    }
-                )
-                2 -> RomSignPage(
-                    state = gemeauState,
-                    onBrowseRom = { showRomFilePicker = true },
-                    onStartSignRom = { withVbmeta ->
-                        pendingWithVbmeta = withVbmeta
-                        if (gemeauState.availableKeysets.isEmpty()) {
-                            onRefreshKeysets()
-                        }
-                        showChooseKeyDialogForRom = true
-                    },
-                    onViewReport = { path, title ->
-                        try {
-                            val f = File(path)
-                            if (f.exists()) {
-                                reportDialogContent = f.readText()
+                    )
+                }
+                GemeauSubScreen.ROMSIGN -> {
+                    RomSignPage(
+                        state = gemeauState,
+                        onBrowseRom = { showRomFilePicker = true },
+                        onStartSignRom = { withVbmeta ->
+                            pendingWithVbmeta = withVbmeta
+                            if (gemeauState.availableKeysets.isEmpty()) {
+                                onRefreshKeysets()
+                            }
+                            showChooseKeyDialogForRom = true
+                        },
+                        onViewReport = { path, title ->
+                            try {
+                                val f = File(path)
+                                if (f.exists()) {
+                                    reportDialogContent = f.readText()
+                                    reportDialogTitle = title
+                                    showReportDialog = true
+                                }
+                            } catch (e: Exception) {
+                                reportDialogContent = "Erreur lecture rapport: ${e.message}"
                                 reportDialogTitle = title
                                 showReportDialog = true
                             }
-                        } catch (e: Exception) {
-                            reportDialogContent = "Erreur lecture rapport: ${e.message}"
-                            reportDialogTitle = title
-                            showReportDialog = true
                         }
+                    )
+                }
+                GemeauSubScreen.VERIFICATION_HUB -> {
+                    GemeauVerificationCarouselView(
+                        onSelectVerifyApp = { onNavigateSubScreen(GemeauSubScreen.VERIFY_APP) },
+                        onSelectVerifyRom = { onNavigateSubScreen(GemeauSubScreen.VERIFY_ROM) }
+                    )
+                }
+                GemeauSubScreen.VERIFY_APP -> {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(16.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        VerifyAppSection(
+                            state = gemeauState,
+                            onBrowseApks = { showVerifyApkFilePicker = true },
+                            onBrowseRomForApks = { showVerifyRomExtractPicker = true },
+                            onExtractApksFromRom = onExtractApksFromRom,
+                            onVerifyApks = onVerifyApks,
+                            onRemoveApk = { file ->
+                                val updated = gemeauState.verifySelectedApks.filter { it.absolutePath != file.absolutePath }
+                                onSelectApksForVerification(updated)
+                            }
+                        )
                     }
-                )
+                }
+                GemeauSubScreen.VERIFY_ROM -> {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(16.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        VerifyRomSection(
+                            state = gemeauState,
+                            onBrowseRomForAudit = { showVerifyRomAuditPicker = true },
+                            onAuditRom = onAuditRom,
+                            onViewReport = { path, title ->
+                                try {
+                                    val f = File(path)
+                                    if (f.exists()) {
+                                        reportDialogContent = f.readText()
+                                        reportDialogTitle = title
+                                        showReportDialog = true
+                                    }
+                                } catch (e: Exception) {
+                                    reportDialogContent = "Erreur lecture rapport: ${e.message}"
+                                    reportDialogTitle = title
+                                    showReportDialog = true
+                                }
+                            }
+                        )
+                    }
+                }
             }
         }
     }
@@ -335,6 +414,46 @@ fun GemeauScreen(
             onFileSelected = { file ->
                 showRomFilePicker = false
                 onSelectRomFile(file)
+            }
+        )
+    }
+
+    // Modal File Picker for Verification APKs
+    if (showVerifyApkFilePicker) {
+        InternalFilePickerDialog(
+            initialDirectory = null,
+            onDismiss = { showVerifyApkFilePicker = false },
+            onFileSelected = { file ->
+                showVerifyApkFilePicker = false
+                val current = gemeauState.verifySelectedApks.toMutableList()
+                if (!current.any { it.absolutePath == file.absolutePath }) {
+                    current.add(file)
+                }
+                onSelectApksForVerification(current)
+            }
+        )
+    }
+
+    // Modal File Picker for Extracting APKs from ROM
+    if (showVerifyRomExtractPicker) {
+        InternalFilePickerDialog(
+            initialDirectory = null,
+            onDismiss = { showVerifyRomExtractPicker = false },
+            onFileSelected = { file ->
+                showVerifyRomExtractPicker = false
+                onSelectRomForApkExtraction(file)
+            }
+        )
+    }
+
+    // Modal File Picker for Auditing Full ROM
+    if (showVerifyRomAuditPicker) {
+        InternalFilePickerDialog(
+            initialDirectory = null,
+            onDismiss = { showVerifyRomAuditPicker = false },
+            onFileSelected = { file ->
+                showVerifyRomAuditPicker = false
+                onSelectRomForAudit(file)
             }
         )
     }
@@ -1318,6 +1437,933 @@ private fun GemeauConsoleCard(
                     Text("Consulter le Rapport d'Audit & Sécurité", fontWeight = FontWeight.Bold)
                 }
             }
+        }
+    }
+}
+
+@Composable
+fun GemeauHubView(
+    state: GemeauUiState,
+    onOpenFeature: (GemeauSubScreen) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    LazyColumn(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp),
+        contentPadding = PaddingValues(vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        // Feature 1: Keymaker
+        item {
+            GemeauMinimalCard(
+                icon = Icons.Default.Key,
+                title = "1. Keymaker",
+                testTag = "open_feature_keymaker",
+                onClick = { onOpenFeature(GemeauSubScreen.KEYMAKER) }
+            )
+        }
+
+        // Feature 2: SIGNAPK
+        item {
+            GemeauMinimalCard(
+                icon = Icons.Default.Layers,
+                title = "2. SIGNAPK",
+                testTag = "open_feature_signapk",
+                onClick = { onOpenFeature(GemeauSubScreen.SIGNAPK) }
+            )
+        }
+
+        // Feature 3: ROMsign
+        item {
+            GemeauMinimalCard(
+                icon = Icons.Default.Build,
+                title = "3. ROMsign",
+                testTag = "open_feature_romsign",
+                onClick = { onOpenFeature(GemeauSubScreen.ROMSIGN) }
+            )
+        }
+
+        // Feature 4: VÉRIFICATION
+        item {
+            GemeauMinimalCard(
+                icon = Icons.Default.VerifiedUser,
+                title = "4. VÉRIFICATION",
+                testTag = "open_feature_verification",
+                onClick = { onOpenFeature(GemeauSubScreen.VERIFICATION_HUB) }
+            )
+        }
+    }
+}
+
+@Composable
+fun GemeauMinimalCard(
+    icon: ImageVector,
+    title: String,
+    testTag: String,
+    onClick: () -> Unit
+) {
+    ElevatedCard(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag(testTag),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+        ),
+        onClick = onClick
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(42.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MaterialTheme.colorScheme.primaryContainer),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.width(14.dp))
+
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f)
+            )
+
+            Button(
+                onClick = onClick,
+                shape = RoundedCornerShape(10.dp),
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+            ) {
+                Text(text = "Ouvrir", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                Spacer(modifier = Modifier.width(4.dp))
+                Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+            }
+        }
+    }
+}
+
+@Composable
+fun GemeauVerificationCarouselView(
+    onSelectVerifyApp: () -> Unit,
+    onSelectVerifyRom: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val carouselPagerState = rememberPagerState(pageCount = { 2 })
+    val coroutineScope = rememberCoroutineScope()
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(16.dp)
+            .verticalScroll(rememberScrollState()),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Spacer(modifier = Modifier.height(10.dp))
+
+        // Carousel Horizontal Pager
+        HorizontalPager(
+            state = carouselPagerState,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(230.dp)
+        ) { page ->
+            if (page == 0) {
+                CarouselVerificationCard(
+                    icon = Icons.Default.VerifiedUser,
+                    title = "Verify App",
+                    buttonLabel = "Ouvrir Verify App",
+                    testTag = "carousel_open_verify_app",
+                    onClick = onSelectVerifyApp
+                )
+            } else {
+                CarouselVerificationCard(
+                    icon = Icons.Default.Security,
+                    title = "Verify ROM",
+                    buttonLabel = "Ouvrir Verify ROM",
+                    testTag = "carousel_open_verify_rom",
+                    onClick = onSelectVerifyRom
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        // Carousel Indicators (Dots)
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            repeat(2) { index ->
+                val isSelected = carouselPagerState.currentPage == index
+                Box(
+                    modifier = Modifier
+                        .height(8.dp)
+                        .width(if (isSelected) 24.dp else 8.dp)
+                        .clip(CircleShape)
+                        .background(if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant)
+                        .clickable {
+                            coroutineScope.launch {
+                                carouselPagerState.animateScrollToPage(index)
+                            }
+                        }
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        // Direct Quick Switch Row
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            OutlinedButton(
+                onClick = onSelectVerifyApp,
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                Icon(imageVector = Icons.Default.VerifiedUser, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Verify App")
+            }
+            OutlinedButton(
+                onClick = onSelectVerifyRom,
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                Icon(imageVector = Icons.Default.Security, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Verify ROM")
+            }
+        }
+    }
+}
+
+@Composable
+fun CarouselVerificationCard(
+    icon: ImageVector,
+    title: String,
+    buttonLabel: String,
+    testTag: String,
+    onClick: () -> Unit
+) {
+    ElevatedCard(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 4.dp)
+            .testTag(testTag),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+        ),
+        onClick = onClick
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(20.dp),
+            verticalArrangement = Arrangement.SpaceBetween,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Box(
+                modifier = Modifier
+                    .size(64.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(MaterialTheme.colorScheme.primaryContainer),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.size(34.dp)
+                )
+            }
+
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+
+            Button(
+                onClick = onClick,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text(text = buttonLabel, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Spacer(modifier = Modifier.width(6.dp))
+                Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+            }
+        }
+    }
+}
+
+@Composable
+fun VerifyAppSection(
+    state: GemeauUiState,
+    onBrowseApks: () -> Unit,
+    onBrowseRomForApks: () -> Unit,
+    onExtractApksFromRom: () -> Unit,
+    onVerifyApks: () -> Unit,
+    onRemoveApk: (File) -> Unit
+) {
+    Column {
+        // Selection Card
+        ElevatedCard(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.primaryContainer),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.VerifiedUser,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        Text(
+                            text = "Vérification des signatures APK",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Analyse cryptographique v1, v2, v3, v4, SHA256 et certificats",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Option 1: Direct APK Selection
+                Text(
+                    text = "1. Sélection directe de fichiers APK",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                OutlinedButton(
+                    onClick = onBrowseApks,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("verify_browse_apks_btn"),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Icon(imageVector = Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Parcourir et ajouter des APKs")
+                }
+
+                if (state.verifySelectedApks.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = "${state.verifySelectedApks.size} APK(s) sélectionné(s) :",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        state.verifySelectedApks.forEach { file ->
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.CheckCircle,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = file.name,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.Medium,
+                                        modifier = Modifier.weight(1f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    IconButton(
+                                        onClick = { onRemoveApk(file) },
+                                        modifier = Modifier.size(24.dp)
+                                    ) {
+                                        Icon(imageVector = Icons.Default.Close, contentDescription = "Supprimer", modifier = Modifier.size(14.dp))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Option 2: Extraction from ROM
+                Text(
+                    text = "2. Ou extraction depuis ROM / GSI / image",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainer,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(
+                            text = state.verifySelectedRomForApkExtraction?.name ?: "Aucun fichier ROM sélectionné",
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(10.dp),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            color = if (state.verifySelectedRomForApkExtraction != null) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    OutlinedButton(
+                        onClick = onBrowseRomForApks,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.testTag("verify_browse_rom_for_apks_btn")
+                    ) {
+                        Text("Choisir")
+                    }
+                }
+
+                if (state.verifySelectedRomForApkExtraction != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = onExtractApksFromRom,
+                        enabled = !state.isExtractingApksFromRom,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("verify_extract_apks_btn"),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        if (state.isExtractingApksFromRom) {
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Extraction des APKs en cours...")
+                        } else {
+                            Icon(imageVector = Icons.Default.Layers, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Extraire les APKs de la ROM")
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Action Button: Verify
+                Button(
+                    onClick = onVerifyApks,
+                    enabled = state.verifySelectedApks.isNotEmpty() && !state.isVerifyingApks,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("verify_execute_btn"),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    if (state.isVerifyingApks) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Vérification cryptographique en cours...")
+                    } else {
+                        Icon(imageVector = Icons.Default.VerifiedUser, contentDescription = null, modifier = Modifier.size(20.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (state.verifySelectedApks.isEmpty()) "Sélectionnez au moins 1 APK" else "VÉRIFIER LES SIGNATURES (${state.verifySelectedApks.size} APKs)",
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+        }
+
+        // Export Path Notice
+        if (state.lastVerificationDir != null) {
+            Spacer(modifier = Modifier.height(12.dp))
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(imageVector = Icons.Default.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Base de données sauvegardée dans : ${state.lastVerificationDir}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
+            }
+        }
+
+        // Results Section
+        if (state.apkVerificationResults.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = "RÉSULTATS DE L'AUDIT (${state.apkVerificationResults.size} APKs)",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                state.apkVerificationResults.forEach { item ->
+                    ApkVerificationCard(detail = item)
+                }
+            }
+        }
+
+        // Integrated Terminal Logs
+        Spacer(modifier = Modifier.height(16.dp))
+        GemeauConsoleCard(
+            isExecuting = state.isVerifyingApks,
+            progress = state.progress,
+            currentStep = state.currentStepText,
+            logs = state.logs,
+            reportPath = null,
+            outputPath = state.lastVerificationDir,
+            onViewReport = {}
+        )
+    }
+}
+
+@Composable
+fun ApkVerificationCard(detail: ApkVerificationDetail) {
+    ElevatedCard(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = detail.fileName,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = if (detail.isSigned) Color(0xFF1B5E20) else Color(0xFFB71C1C)
+                ) {
+                    Text(
+                        text = if (detail.isSigned) "SIGNÉ & VALIDE" else "NON SIGNÉ",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Taille : ${detail.fileSizeFormatted}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+            // Schemes Badges
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                SchemeBadge(name = "v1 (JAR)", active = detail.hasV1Scheme)
+                SchemeBadge(name = "v2 (Block)", active = detail.hasV2Scheme)
+                SchemeBadge(name = "v3 (Rotate)", active = detail.hasV3Scheme)
+                SchemeBadge(name = "v4 (Tree)", active = detail.hasV4Scheme)
+            }
+
+            if (detail.isSigned) {
+                Spacer(modifier = Modifier.height(10.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                Spacer(modifier = Modifier.height(10.dp))
+
+                DetailInfoRow(label = "Sujet", value = detail.subjectDn)
+                DetailInfoRow(label = "Émetteur", value = detail.issuerDn)
+                DetailInfoRow(label = "Algorithme", value = "${detail.algorithm} (${detail.keySize} bits)")
+                DetailInfoRow(label = "Validité", value = "Du ${detail.validFrom} au ${detail.validUntil}")
+
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Empreinte SHA-256 :",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = detail.sha256Fingerprint,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(8.dp)
+                    )
+                }
+            }
+
+            if (detail.errors.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(8.dp)) {
+                        detail.errors.forEach { err ->
+                            Text(text = "• $err", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onErrorContainer)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun SchemeBadge(name: String, active: Boolean) {
+    Surface(
+        shape = RoundedCornerShape(6.dp),
+        color = if (active) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh
+    ) {
+        Text(
+            text = name,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
+            color = if (active) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+        )
+    }
+}
+
+@Composable
+fun DetailInfoRow(label: String, value: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp)
+    ) {
+        Text(
+            text = "$label : ",
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
+fun VerifyRomSection(
+    state: GemeauUiState,
+    onBrowseRomForAudit: () -> Unit,
+    onAuditRom: () -> Unit,
+    onViewReport: (path: String, title: String) -> Unit
+) {
+    Column {
+        // Selection Card
+        ElevatedCard(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.primaryContainer),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Security,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        Text(
+                            text = "Audit de la chaîne de confiance ROM",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "GSI, ZIP custom/stock, images IMG et répertoires système",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Text(
+                    text = "Fichier ROM / GSI / image ou répertoire :",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainer,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(
+                            text = state.verifySelectedRomForAudit?.name ?: "Aucune ROM sélectionnée",
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(10.dp),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            color = if (state.verifySelectedRomForAudit != null) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    OutlinedButton(
+                        onClick = onBrowseRomForAudit,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.testTag("verify_browse_rom_audit_btn")
+                    ) {
+                        Text("Parcourir")
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Button(
+                    onClick = onAuditRom,
+                    enabled = state.verifySelectedRomForAudit != null && !state.isAuditingRom,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("verify_audit_rom_btn"),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    if (state.isAuditingRom) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Audit de la chaîne de confiance en cours...")
+                    } else {
+                        Icon(imageVector = Icons.Default.Security, contentDescription = null, modifier = Modifier.size(20.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("AUDITER LA ROM COMPLÈTE", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
+        // Audit Result Card
+        if (state.romAuditResult != null) {
+            val audit = state.romAuditResult
+            Spacer(modifier = Modifier.height(16.dp))
+
+            ElevatedCard(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    // Header Status
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (audit.trustChainValid) Color(0xFF1B5E20) else Color(0xFFE65100),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = if (audit.trustChainValid) Icons.Default.CheckCircle else Icons.Default.Warning,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = if (audit.trustChainValid) "CHAÎNE DE CONFIANCE : CONFORME" else "CHAÎNE DE CONFIANCE : MIXTE",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                                Text(
+                                    text = if (audit.trustChainValid) "Toutes les signatures système et XML sont alignées." else "Plusieurs clés détectées ou incohérences partielles.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color.White.copy(alpha = 0.9f)
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Text(
+                        text = "Statistiques de la ROM : ${audit.romFileName}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        MetricCard(modifier = Modifier.weight(1f), title = "Total APKs", value = audit.totalApksAnalyzed.toString())
+                        MetricCard(modifier = Modifier.weight(1f), title = "Signés valides", value = audit.signedApksCount.toString())
+                        MetricCard(modifier = Modifier.weight(1f), title = "GAPPS", value = audit.gappsCount.toString())
+                        MetricCard(modifier = Modifier.weight(1f), title = "Clés uniques", value = audit.distinctSignersCount.toString())
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+                    HorizontalDivider()
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    // SELinux & XML Status
+                    Text(
+                        text = "Contrôles de sécurité & Intégrité système :",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    DetailInfoRow(
+                        label = "mac_permissions.xml (SELinux)",
+                        value = if (audit.macPermissionsFound) "Présent (${if (audit.macPermissionsAligned) "Aligné avec Platform Key" else "À synchroniser"})" else "Non détecté"
+                    )
+                    DetailInfoRow(
+                        label = "otacerts.zip (Recovery OTA)",
+                        value = if (audit.otacertsFound) "Présent et valide" else "Non présent"
+                    )
+                    DetailInfoRow(
+                        label = "Base de données exportée",
+                        value = audit.databaseJsonPath
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Button(
+                        onClick = { onViewReport(audit.summaryReportPath, "Rapport d'audit : ${audit.romFileName}") },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("verify_view_full_report_btn"),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(imageVector = Icons.Default.Description, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Consulter le Rapport d'Audit & Sécurité", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
+        // Integrated Terminal Logs
+        Spacer(modifier = Modifier.height(16.dp))
+        GemeauConsoleCard(
+            isExecuting = state.isAuditingRom,
+            progress = state.progress,
+            currentStep = state.currentStepText,
+            logs = state.logs,
+            reportPath = state.romAuditResult?.summaryReportPath,
+            outputPath = state.romAuditResult?.databaseJsonPath,
+            onViewReport = { path ->
+                onViewReport(path, "Rapport d'audit ROM")
+            }
+        )
+    }
+}
+
+@Composable
+fun MetricCard(modifier: Modifier = Modifier, title: String, value: String) {
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = modifier
+    ) {
+        Column(
+            modifier = Modifier.padding(8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = value,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Text(
+                text = title,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }

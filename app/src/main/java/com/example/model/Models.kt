@@ -179,11 +179,70 @@ data class RomTrustChainReport(
 enum class GemeauTab(val title: String) {
     KEYMAKER("Keymaker"),
     SIGNAPK("SIGNAPK"),
-    ROMSIGN("ROMsign")
+    ROMSIGN("ROMsign"),
+    VERIFICATION("VÉRIFICATION")
 }
+
+enum class GemeauSubScreen {
+    HUB,
+    KEYMAKER,
+    SIGNAPK,
+    ROMSIGN,
+    VERIFICATION_HUB,
+    VERIFY_APP,
+    VERIFY_ROM
+}
+
+enum class GemeauVerifySubTab(val label: String) {
+    VERIFY_APP("Verify app"),
+    VERIFY_ROM("Verify rom")
+}
+
+data class ApkVerificationDetail(
+    val fileName: String,
+    val filePath: String,
+    val fileSizeFormatted: String,
+    val isSigned: Boolean,
+    val hasV1Scheme: Boolean,
+    val hasV2Scheme: Boolean,
+    val hasV3Scheme: Boolean,
+    val hasV4Scheme: Boolean,
+    val sha256Fingerprint: String,
+    val subjectDn: String,
+    val issuerDn: String,
+    val algorithm: String,
+    val keySize: Int,
+    val validFrom: String,
+    val validUntil: String,
+    val isExpired: Boolean,
+    val isSelfSigned: Boolean,
+    val errors: List<String> = emptyList()
+)
+
+data class RomVerificationAudit(
+    val romFileName: String,
+    val romFilePath: String,
+    val auditDate: String,
+    val totalApksAnalyzed: Int,
+    val signedApksCount: Int,
+    val unsignedApksCount: Int,
+    val gappsCount: Int,
+    val distinctSignersCount: Int,
+    val keyDistribution: Map<String, Int> = emptyMap(),
+    val macPermissionsFound: Boolean = false,
+    val macPermissionsAligned: Boolean = true,
+    val otacertsFound: Boolean = false,
+    val sepolicyAligned: Boolean = true,
+    val trustChainValid: Boolean = true,
+    val databaseJsonPath: String = "",
+    val summaryReportPath: String = "",
+    val apksSummary: List<ApkVerificationDetail> = emptyList(),
+    val xmlEntriesFound: List<String> = emptyList()
+)
 
 data class GemeauUiState(
     val isExecuting: Boolean = false,
+    val currentSubScreen: GemeauSubScreen = GemeauSubScreen.HUB,
     val activeTab: GemeauTab = GemeauTab.KEYMAKER,
     val availableKeysets: List<KeysetInfo> = emptyList(),
     val selectedKeyset: KeysetInfo? = null,
@@ -200,6 +259,18 @@ data class GemeauUiState(
     // Page 3: ROMsign inputs
     val selectedRomFile: java.io.File? = null,
     val generateVbmeta: Boolean = false,
+    // Page 4: VÉRIFICATION inputs and results
+    val verifySubTab: GemeauVerifySubTab = GemeauVerifySubTab.VERIFY_APP,
+    val verifySelectedApks: List<java.io.File> = emptyList(),
+    val verifySelectedRomForApkExtraction: java.io.File? = null,
+    val verifyExtractedApksFromRom: List<java.io.File> = emptyList(),
+    val isExtractingApksFromRom: Boolean = false,
+    val apkVerificationResults: List<ApkVerificationDetail> = emptyList(),
+    val isVerifyingApks: Boolean = false,
+    val verifySelectedRomForAudit: java.io.File? = null,
+    val isAuditingRom: Boolean = false,
+    val romAuditResult: RomVerificationAudit? = null,
+    val lastVerificationDir: String? = null,
     // Execution Progress & Terminal
     val progress: Float = 0f,
     val currentStepText: String = "Prêt pour la signature",

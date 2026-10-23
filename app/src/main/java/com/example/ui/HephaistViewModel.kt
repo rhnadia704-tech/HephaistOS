@@ -43,6 +43,9 @@ import com.example.model.RepackUiState
 import com.example.model.UnpackUiState
 import com.example.data.ExtensionManager
 import com.example.model.AheAction
+import com.example.model.ApkVerificationDetail
+import com.example.model.GemeauVerifySubTab
+import com.example.model.RomVerificationAudit
 import com.example.model.AheExtension
 import com.example.model.AheUiState
 import java.io.File
@@ -144,7 +147,14 @@ class HephaistViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun selectScreen(screen: Screen) {
-        _uiState.update { it.copy(currentScreen = screen, isPlusDrawerOpen = false) }
+        _uiState.update {
+            val updatedGemeau = if (screen == Screen.GEMEAU) {
+                it.gemeauUiState.copy(currentSubScreen = com.example.model.GemeauSubScreen.HUB)
+            } else {
+                it.gemeauUiState
+            }
+            it.copy(currentScreen = screen, isPlusDrawerOpen = false, gemeauUiState = updatedGemeau)
+        }
     }
 
     fun setRailState(state: RailState) {
@@ -1068,6 +1078,25 @@ class HephaistViewModel(application: Application) : AndroidViewModel(application
         _uiState.update { it.copy(gemeauUiState = it.gemeauUiState.copy(activeTab = tab)) }
     }
 
+    fun setGemeauSubScreen(subScreen: com.example.model.GemeauSubScreen) {
+        _uiState.update { it.copy(gemeauUiState = it.gemeauUiState.copy(currentSubScreen = subScreen)) }
+    }
+
+    fun navigateBackInGemeau() {
+        _uiState.update { state ->
+            val nextSubScreen = when (state.gemeauUiState.currentSubScreen) {
+                com.example.model.GemeauSubScreen.HUB -> com.example.model.GemeauSubScreen.HUB
+                com.example.model.GemeauSubScreen.KEYMAKER,
+                com.example.model.GemeauSubScreen.SIGNAPK,
+                com.example.model.GemeauSubScreen.ROMSIGN,
+                com.example.model.GemeauSubScreen.VERIFICATION_HUB -> com.example.model.GemeauSubScreen.HUB
+                com.example.model.GemeauSubScreen.VERIFY_APP,
+                com.example.model.GemeauSubScreen.VERIFY_ROM -> com.example.model.GemeauSubScreen.VERIFICATION_HUB
+            }
+            state.copy(gemeauUiState = state.gemeauUiState.copy(currentSubScreen = nextSubScreen))
+        }
+    }
+
     fun refreshKeysets(context: Context) {
         viewModelScope.launch(Dispatchers.IO) {
             val keysets = WorkspaceManager.listAvailableKeysets(context)
@@ -1366,6 +1395,235 @@ class HephaistViewModel(application: Application) : AndroidViewModel(application
                     )
                 }
                 showSnackbar("ROM ${rom.name} resignée ! (${report.resignedApksCount} APKs resignés, ${report.preservedGappsCount} GApps préservés)")
+            }
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // GEMEAU VERIFICATION ACTIONS (Verify App & Verify ROM)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    fun selectGemeauVerifySubTab(subTab: GemeauVerifySubTab) {
+        _uiState.update {
+            it.copy(gemeauUiState = it.gemeauUiState.copy(verifySubTab = subTab))
+        }
+    }
+
+    fun setSelectedApksForVerification(files: List<File>) {
+        _uiState.update {
+            it.copy(gemeauUiState = it.gemeauUiState.copy(verifySelectedApks = files))
+        }
+    }
+
+    fun setSelectedRomForApkExtraction(file: File?) {
+        _uiState.update {
+            it.copy(gemeauUiState = it.gemeauUiState.copy(verifySelectedRomForApkExtraction = file))
+        }
+    }
+
+    fun extractApksFromSelectedRom(context: Context) {
+        val rom = _uiState.value.gemeauUiState.verifySelectedRomForApkExtraction
+        if (rom == null) {
+            showSnackbar("Veuillez choisir une image ou archive de ROM.")
+            return
+        }
+
+        _uiState.update {
+            it.copy(
+                gemeauUiState = it.gemeauUiState.copy(
+                    isExtractingApksFromRom = true,
+                    currentStepText = "Extraction des APKs depuis ${rom.name}...",
+                    logs = (it.gemeauUiState.logs + TerminalEntry("[VERIFY] Extraction des paquets depuis ${rom.name}...")).takeLast(250)
+                )
+            )
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val sessionDir = File(WorkspaceManager.getSignerVerifyDir(context), "EXTRACTED_${System.currentTimeMillis()}").apply { mkdirs() }
+            val apks = GemeauSignerEngine.extractApksFromRom(
+                romFile = rom,
+                targetDir = sessionDir,
+                onProgress = { step, percent ->
+                    _uiState.update {
+                        it.copy(gemeauUiState = it.gemeauUiState.copy(currentStepText = step, progress = percent))
+                    }
+                },
+                onLog = { line ->
+                    _uiState.update {
+                        it.copy(
+                            gemeauUiState = it.gemeauUiState.copy(
+                                logs = (it.gemeauUiState.logs + TerminalEntry(line, isSuccess = line.contains("[EXTRAIT]"))).takeLast(250)
+                            )
+                        )
+                    }
+                }
+            )
+
+            withContext(Dispatchers.Main) {
+                _uiState.update {
+                    it.copy(
+                        gemeauUiState = it.gemeauUiState.copy(
+                            isExtractingApksFromRom = false,
+                            verifyExtractedApksFromRom = apks,
+                            verifySelectedApks = apks,
+                            currentStepText = "${apks.size} APK(s) extraits de ${rom.name}"
+                        )
+                    )
+                }
+                showSnackbar("${apks.size} APK(s) extraits avec succès !")
+            }
+        }
+    }
+
+    fun verifySelectedApks(context: Context) {
+        val apks = _uiState.value.gemeauUiState.verifySelectedApks
+        if (apks.isEmpty()) {
+            showSnackbar("Veuillez sélectionner au moins un fichier APK à vérifier.")
+            return
+        }
+
+        _uiState.update {
+            it.copy(
+                gemeauUiState = it.gemeauUiState.copy(
+                    isVerifyingApks = true,
+                    progress = 0.05f,
+                    currentStepText = "Audit des signatures pour ${apks.size} APK(s)...",
+                    logs = (it.gemeauUiState.logs +
+                            TerminalEntry("=======================================================") +
+                            TerminalEntry("[VERIFY APP] Lancement de l'audit pour ${apks.size} APK(s)...")).takeLast(250)
+                )
+            )
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+            val verifyDir = File(WorkspaceManager.getSignerVerifyDir(context), "VERIFY_APPS_$timestamp").apply { mkdirs() }
+            val details = mutableListOf<ApkVerificationDetail>()
+
+            for ((idx, apk) in apks.withIndex()) {
+                val detail = GemeauSignerEngine.verifyApkSignature(apk)
+                details.add(detail)
+                val statusText = if (detail.isSigned) "SIGNÉ (${detail.algorithm})" else "NON SIGNÉ"
+                val logEntry = TerminalEntry("[APK ${idx + 1}/${apks.size}] ${apk.name} -> $statusText • SHA256: ${detail.sha256Fingerprint.take(23)}...", isSuccess = detail.isSigned, isError = !detail.isSigned)
+                _uiState.update {
+                    it.copy(
+                        gemeauUiState = it.gemeauUiState.copy(
+                            progress = (idx + 1).toFloat() / apks.size,
+                            currentStepText = "Vérifié : ${apk.name}",
+                            logs = (it.gemeauUiState.logs + logEntry).takeLast(250)
+                        )
+                    )
+                }
+            }
+
+            val jsonReport = org.json.JSONObject().apply {
+                put("type", "APPS_VERIFICATION")
+                put("date", SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.FRENCH).format(Date()))
+                put("totalApks", apks.size)
+                val list = org.json.JSONArray()
+                details.forEach { d ->
+                    list.put(org.json.JSONObject().apply {
+                        put("file", d.fileName)
+                        put("isSigned", d.isSigned)
+                        put("v1", d.hasV1Scheme)
+                        put("v2", d.hasV2Scheme)
+                        put("v3", d.hasV3Scheme)
+                        put("v4", d.hasV4Scheme)
+                        put("sha256", d.sha256Fingerprint)
+                        put("subject", d.subjectDn)
+                        put("issuer", d.issuerDn)
+                        put("algorithm", d.algorithm)
+                        put("keySize", d.keySize)
+                        put("validUntil", d.validUntil)
+                    })
+                }
+                put("results", list)
+            }
+            File(verifyDir, "signature_database.json").writeText(jsonReport.toString(2))
+
+            withContext(Dispatchers.Main) {
+                _uiState.update {
+                    it.copy(
+                        gemeauUiState = it.gemeauUiState.copy(
+                            isVerifyingApks = false,
+                            progress = 1.0f,
+                            apkVerificationResults = details,
+                            lastVerificationDir = verifyDir.absolutePath,
+                            currentStepText = "Vérification terminée (${details.count { d -> d.isSigned }}/${details.size} signés)"
+                        )
+                    )
+                }
+                showSnackbar("${details.size} APK(s) analysés. Rapport enregistré dans Data/SIGNER/VERIFY/")
+            }
+        }
+    }
+
+    fun setSelectedRomForAudit(file: File?) {
+        _uiState.update {
+            it.copy(gemeauUiState = it.gemeauUiState.copy(verifySelectedRomForAudit = file))
+        }
+    }
+
+    fun auditSelectedRom(context: Context) {
+        val rom = _uiState.value.gemeauUiState.verifySelectedRomForAudit
+        if (rom == null) {
+            showSnackbar("Veuillez sélectionner un fichier ROM ou partition pour l'audit complet.")
+            return
+        }
+
+        _uiState.update {
+            it.copy(
+                gemeauUiState = it.gemeauUiState.copy(
+                    isAuditingRom = true,
+                    progress = 0.05f,
+                    currentStepText = "Audit de la chaîne de confiance de ${rom.name}...",
+                    logs = (it.gemeauUiState.logs +
+                            TerminalEntry("=======================================================") +
+                            TerminalEntry("[VERIFY ROM] Démarrage de l'audit de la chaîne de confiance pour ${rom.name}...")).takeLast(250)
+                )
+            )
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val audit = GemeauSignerEngine.auditRomTrustChain(
+                romFile = rom,
+                context = context,
+                onProgress = { step, percent ->
+                    _uiState.update {
+                        it.copy(
+                            gemeauUiState = it.gemeauUiState.copy(
+                                currentStepText = step,
+                                progress = percent
+                            )
+                        )
+                    }
+                },
+                onLog = { line ->
+                    val isSuccess = line.contains("[RÉSULTAT") || line.contains("[CHAÎNE") || line.contains("[AUDIT COMPLET")
+                    val isError = line.contains("[ERREUR]")
+                    _uiState.update {
+                        it.copy(
+                            gemeauUiState = it.gemeauUiState.copy(
+                                logs = (it.gemeauUiState.logs + TerminalEntry(line, isSuccess = isSuccess, isError = isError)).takeLast(250)
+                            )
+                        )
+                    }
+                }
+            )
+
+            withContext(Dispatchers.Main) {
+                _uiState.update {
+                    it.copy(
+                        gemeauUiState = it.gemeauUiState.copy(
+                            isAuditingRom = false,
+                            progress = 1.0f,
+                            romAuditResult = audit,
+                            lastVerificationDir = File(audit.databaseJsonPath).parentFile?.absolutePath,
+                            currentStepText = "Audit ROM terminé (${audit.signedApksCount} paquets signés)"
+                        )
+                    )
+                }
+                showSnackbar("Audit complet de ${rom.name} terminé ! Base de données générée dans Data/SIGNER/VERIFY/")
             }
         }
     }

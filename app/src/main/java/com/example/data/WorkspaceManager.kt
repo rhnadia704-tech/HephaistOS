@@ -424,4 +424,201 @@ exit 0
         val dir = getSubDir(context, "WebApps")
         return dir.listFiles { f -> f.isDirectory && File(f, "index.html").exists() }?.toList() ?: emptyList()
     }
+
+    fun getSignerVerifyDir(context: Context): File {
+        val rootDataDir = File(getWorkspaceRoot(context), "Data")
+        val signerDir = File(rootDataDir, "SIGNER")
+        val verifyDir = File(signerDir, "VERIFY")
+        if (!verifyDir.exists()) verifyDir.mkdirs()
+        return verifyDir
+    }
+
+    fun getSatellitesDir(context: Context): File {
+        val dir = getSubDir(context, "Satellites")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    fun getSatelliteTemplateDir(context: Context): File {
+        val dir = File(getSubDir(context, "Templates"), "satellite_template")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    fun ensureSatelliteStarterTemplate(context: Context): File {
+        val templateDir = getSatelliteTemplateDir(context)
+        val srcDir = File(templateDir, "app/src/main/java/org/hephaistos/satellite/starter").apply { mkdirs() }
+
+        val manifestFile = File(templateDir, "app/src/main/AndroidManifest.xml")
+        if (!manifestFile.exists()) {
+            manifestFile.parentFile?.mkdirs()
+            manifestFile.writeText(
+                """<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.hephaistos.satellite.starter">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+
+    <application
+        android:allowBackup="true"
+        android:label="Satellite HephaistOS"
+        android:supportsRtl="true">
+
+        <!-- ADN INDISPENSABLE HEPHAISTOS : Permet la détection automatique même pour les packages com.aistudio... -->
+        <meta-data android:name="hephaistos.satellite" android:value="true" />
+        <meta-data android:name="org.hephaistos.satellite.V1" android:value="true" />
+        <meta-data android:name="org.hephaistos.addon.CAPABILITIES" android:value="rom_tools,apk_inspect,root_worker" />
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="Satellite">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="org.hephaistos.action.SATELLITE" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".SatelliteIpcService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="org.hephaistos.service.SATELLITE_IPC" />
+            </intent-filter>
+        </service>
+    </application>
+</manifest>""".trimIndent()
+            )
+        }
+
+        val themeFile = File(srcDir, "HephaistLockedTheme.kt")
+        if (!themeFile.exists()) {
+            themeFile.writeText(
+                """package org.hephaistos.satellite.starter
+
+import androidx.compose.material3.*
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
+
+// CHARTE GRAPHIQUE OFFICIELLE HEPHAISTOS (THÈME VERROUILLÉ)
+val HephaistPrimary = Color(0xFFF97316)
+val HephaistOnPrimary = Color(0xFFFFFFFF)
+val HephaistPrimaryContainer = Color(0xFFFFDBCA)
+val HephaistOnPrimaryContainer = Color(0xFF341100)
+val HephaistSecondary = Color(0xFF0EA5E9)
+val HephaistBackground = Color(0xFF0F172A)
+val HephaistSurface = Color(0xFF1E293B)
+val HephaistSurfaceVariant = Color(0xFF334155)
+
+val HephaistDarkColorScheme = darkColorScheme(
+    primary = HephaistPrimary,
+    onPrimary = HephaistOnPrimary,
+    primaryContainer = HephaistPrimaryContainer,
+    onPrimaryContainer = HephaistOnPrimaryContainer,
+    secondary = HephaistSecondary,
+    background = HephaistBackground,
+    surface = HephaistSurface,
+    surfaceVariant = HephaistSurfaceVariant
+)
+
+@Composable
+fun HephaistSatelliteTheme(content: @Composable () -> Unit) {
+    MaterialTheme(
+        colorScheme = HephaistDarkColorScheme,
+        content = content
+    )
+}""".trimIndent()
+            )
+        }
+
+        val activityFile = File(srcDir, "MainActivity.kt")
+        if (!activityFile.exists()) {
+            activityFile.writeText(
+                """package org.hephaistos.satellite.starter
+
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent {
+            HephaistSatelliteTheme {
+                Scaffold { padding ->
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(padding)
+                            .padding(24.dp),
+                        verticalArrangement = Arrangement.Center,
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "Satellite HephaistOS Connecté",
+                            style = MaterialTheme.typography.headlineSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "Ce satellite adopte rigoureusement la charte Material 3 d'HephaistOS.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+    }
+}""".trimIndent()
+            )
+        }
+
+        val readmeFile = File(templateDir, "README.md")
+        readmeFile.writeText(
+            """# BIBLE DES SATELLITES HEPHAISTOS (CONTRAT OFFICIEL)
+
+Ce document constitue la référence stricte et immuable pour toute application satellite HephaistOS, qu'elle soit conçue manuellement ou générée par une IA dans Google AI Studio.
+
+## 1. Contrat d'Identification Universel (Manifest)
+Peu importe le nom du package de votre application (y compris les packages `com.aistudio.*`), HephaistOS la reconnaîtra instantanément à 100% si elle respecte ces deux critères obligatoires dans `AndroidManifest.xml` :
+
+1. **Balise Meta-Data sous `<application>`** :
+   ```xml
+   <meta-data android:name="hephaistos.satellite" android:value="true" />
+   ```
+
+2. **Action Intent dans votre Activité Principale** :
+   ```xml
+   <intent-filter>
+       <action android:name="org.hephaistos.action.SATELLITE" />
+       <category android:name="android.intent.category.DEFAULT" />
+   </intent-filter>
+   ```
+
+## 2. Thème Graphique Strictement Verrouillé
+Les satellites sont de véritables extensions intégrées d'HephaistOS :
+- Ne pas inventer de nouvelle charte ou palette de couleurs.
+- Utiliser impérativement `HephaistSatelliteTheme` (défini dans `HephaistLockedTheme.kt`).
+- L'interface suit les teintes officielles : Dark Background (0xFF0F172A), Surface (0xFF1E293B) et Ambre Héphaïstos (0xFFF97316).
+
+## 3. Déploiement et Dépôt Direct
+- Une fois installée sur l'appareil, l'application est automatiquement détectée et apparaît sur l'accueil d'HephaistOS.
+- Alternativement, le fichier `.apk` peut être déposé directement dans le dossier :
+  `/sdcard/HEPHAISTOS/Satellites/`
+""".trimIndent()
+        )
+
+        return templateDir
+    }
 }

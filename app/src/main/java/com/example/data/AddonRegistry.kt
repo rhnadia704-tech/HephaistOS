@@ -98,7 +98,7 @@ object AddonRegistry {
             }
         }
 
-        // 3. Check All Installed Applications for HephaistOS Meta-Data DNA or Package Naming
+        // 3. Check All Installed Applications for Explicit HephaistOS Meta-Data DNA or Package Naming
         try {
             val installedApps = pm.getInstalledApplications(PackageManager.GET_META_DATA)
             for (appInfo in installedApps) {
@@ -107,9 +107,11 @@ object AddonRegistry {
 
                 val metaData = appInfo.metaData
                 val isSatelliteByMeta = metaData != null && (
+                    metaData.getBoolean("hephaistos.satellite", false) ||
                     metaData.getBoolean(METADATA_SATELLITE_V1, false) ||
-                    metaData.containsKey(METADATA_CAPABILITIES) ||
-                    metaData.containsKey(METADATA_ROLE)
+                    metaData.getString("hephaistos.satellite") == "true" ||
+                    metaData.containsKey("hephaistos.satellite") ||
+                    metaData.containsKey("org.hephaistos.satellite")
                 )
 
                 val isSatelliteByPackage = pkgName.startsWith("org.hephaistos.") ||
@@ -122,6 +124,39 @@ object AddonRegistry {
             }
         } catch (e: Exception) {
             Log.w(TAG, "Erreur inspection getInstalledApplications: ${e.message}")
+        }
+
+        // 4. Scan Standalone APKs dropped into /sdcard/HEPHAISTOS/Satellites/
+        try {
+            val satellitesDir = WorkspaceManager.getSatellitesDir(context)
+            val apkFiles = satellitesDir.listFiles { f -> f.isFile && f.extension.equals("apk", ignoreCase = true) }
+            if (apkFiles != null) {
+                for (apk in apkFiles) {
+                    val pkgInfo = pm.getPackageArchiveInfo(apk.absolutePath, PackageManager.GET_META_DATA)
+                    val archivePkg = pkgInfo?.packageName ?: apk.nameWithoutExtension
+                    if (!seenPackages.contains(archivePkg)) {
+                        seenPackages.add(archivePkg)
+                        val appLabel = apk.nameWithoutExtension.replace("_", " ").capitalize()
+                        discovered.add(
+                            CompatibleApp(
+                                id = "apk_${apk.nameWithoutExtension}",
+                                name = appLabel,
+                                packageName = archivePkg,
+                                version = pkgInfo?.versionName ?: "1.0",
+                                description = "APK Satellite autonome détecté dans sdcard/HEPHAISTOS/Satellites/",
+                                category = "Satellite APK Fichier",
+                                appType = AppType.NATIVE_ADDON,
+                                iconKey = "forge",
+                                capabilities = listOf("standalone_apk", "file_storage"),
+                                status = "Fichier APK",
+                                isInstalled = false
+                            )
+                        )
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Erreur scan dossier Satellites : ${e.message}")
         }
 
         return discovered
