@@ -24,7 +24,8 @@ object WorkspaceManager {
         "EXTRACT",
         "SIGNER",
         "Extensions",
-        "TOOLS"
+        "TOOLS",
+        "ANALYST"
     )
 
     fun getWorkspaceRoot(context: Context): File {
@@ -160,6 +161,17 @@ object WorkspaceManager {
         val gemeauDir = File(dataDir, "GEMEAU")
         if (!gemeauDir.exists()) gemeauDir.mkdirs()
         return gemeauDir
+    }
+
+    fun getAnalystDir(context: Context): File {
+        return getSubDir(context, "ANALYST")
+    }
+
+    fun getAnalystTargetDir(context: Context, targetName: String): File {
+        val sanitized = targetName.replace("[^a-zA-Z0-9._-]".toRegex(), "_")
+        val targetDir = File(getAnalystDir(context), sanitized)
+        if (!targetDir.exists()) targetDir.mkdirs()
+        return targetDir
     }
 
     fun getInternalToolsBinDir(context: Context): File {

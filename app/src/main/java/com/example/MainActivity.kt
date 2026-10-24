@@ -69,6 +69,7 @@ import com.example.ui.components.HeavyTaskDialog
 import com.example.ui.components.HephaistNavRail
 import com.example.ui.components.PlusDrawer
 import com.example.ui.screens.AheDynamicScreen
+import com.example.ui.screens.AnalystScreen
 import com.example.ui.screens.ExtractorScreen
 import com.example.ui.screens.GemeauScreen
 import com.example.ui.screens.HomeScreen
@@ -302,6 +303,9 @@ class MainActivity : ComponentActivity() {
                                                 onNavigateToGemeau = {
                                                     viewModel.selectScreen(Screen.GEMEAU)
                                                 },
+                                                onNavigateToAnalyst = {
+                                                    viewModel.selectScreen(Screen.ANALYST)
+                                                },
                                                 onOpenExtension = { ext ->
                                                     viewModel.openAheExtension(ext)
                                                 },
@@ -427,6 +431,27 @@ class MainActivity : ComponentActivity() {
                                                     viewModel.selectScreen(Screen.HOME)
                                                 }
                                             )
+
+                                            Screen.ANALYST -> {
+                                                LaunchedEffect(Unit) {
+                                                    viewModel.refreshAnalystTargets(context)
+                                                }
+                                                AnalystScreen(
+                                                    analystState = uiState.analystUiState,
+                                                    onRefreshTargets = {
+                                                        viewModel.refreshAnalystTargets(context)
+                                                    },
+                                                    onSelectTarget = { target ->
+                                                        viewModel.selectAnalystTarget(target)
+                                                    },
+                                                    onLaunchAnalysis = {
+                                                        viewModel.runAnalystScan(context)
+                                                    },
+                                                    onBackToHome = {
+                                                        viewModel.selectScreen(Screen.HOME)
+                                                    }
+                                                )
+                                            }
 
                                             Screen.AHE_EXTENSION -> {
                                                 val ext = uiState.aheUiState.activeExtension

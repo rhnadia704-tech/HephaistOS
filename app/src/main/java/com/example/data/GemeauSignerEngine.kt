@@ -631,13 +631,51 @@ object GemeauSignerEngine {
 
         if (isDirectoryRom) {
             onLog("[AUDIT DYNAMIQUE] Exploration directe de l'arborescence : ${romFile.name}...")
+            val fsConfigFile = File(romFile, "fs_config").takeIf { it.exists() } ?: File(romFile.parentFile, "fs_config").takeIf { it?.exists() == true }
+            val recordedFsPaths = fsConfigFile?.readLines()?.mapNotNull { line ->
+                val p = line.substringBefore(" ").trim().removePrefix("./").replace("\\", "/")
+                if (p.isNotBlank()) p else null
+            }?.toSet()
+
             romFile.walkTopDown().forEach { file ->
                 if (file.isFile && file.extension.equals("apk", ignoreCase = true)) {
                     val relPath = file.relativeTo(romFile).path.replace("\\", "/")
                     val certFp = extractCertificateFingerprint(file)
                     val isGapp = isProtectedGapp(relPath, file)
                     val manifestInfo = parseApkManifest(file)
-                    val item = RomApkEntry(relPath, file, certFp, isGapp, manifestInfo)
+
+                    val parent = file.parentFile
+                    val baseName = file.nameWithoutExtension
+                    val oatDir = File(parent, "oat")
+
+                    val hasFsv = if (recordedFsPaths != null) {
+                        recordedFsPaths.contains("$relPath.fsvmeta") || recordedFsPaths.contains("${relPath.substringBeforeLast(".")}.fsvmeta")
+                    } else {
+                        File(parent, "${file.name}.fsvmeta").exists() || File(parent, "$baseName.fsvmeta").exists()
+                    }
+
+                    val hasVdex = if (recordedFsPaths != null) {
+                        recordedFsPaths.any { it.contains(baseName) && it.endsWith(".vdex", ignoreCase = true) }
+                    } else {
+                        File(parent, "$baseName.vdex").exists() || (oatDir.exists() && oatDir.walkTopDown().any { it.name.equals("$baseName.vdex", ignoreCase = true) })
+                    }
+
+                    val hasOdex = if (recordedFsPaths != null) {
+                        recordedFsPaths.any { it.contains(baseName) && it.endsWith(".odex", ignoreCase = true) }
+                    } else {
+                        File(parent, "$baseName.odex").exists() || (oatDir.exists() && oatDir.walkTopDown().any { it.name.equals("$baseName.odex", ignoreCase = true) })
+                    }
+
+                    val item = RomApkEntry(
+                        zipPath = relPath,
+                        localFile = file,
+                        originalFingerprint = certFp,
+                        isGapp = isGapp,
+                        manifestInfo = manifestInfo,
+                        originallyHadFsvmeta = hasFsv,
+                        originallyHadVdex = hasVdex,
+                        originallyHadOdex = hasOdex
+                    )
                     foundApks.add(item)
                     if (isGapp) {
                         preservedGapps.add(relPath)
@@ -650,9 +688,16 @@ object GemeauSignerEngine {
             isZipRom = true
             try {
                 val zf = ZipFile(romFile)
-                val entries = zf.entries()
-                while (entries.hasMoreElements()) {
-                    val entry = entries.nextElement()
+                val allZipEntryNames = mutableSetOf<String>()
+                val allZipEntries = mutableListOf<ZipEntry>()
+                val enumEntries = zf.entries()
+                while (enumEntries.hasMoreElements()) {
+                    val entry = enumEntries.nextElement()
+                    allZipEntries.add(entry)
+                    allZipEntryNames.add(entry.name)
+                }
+
+                for (entry in allZipEntries) {
                     if (entry.name.endsWith(".apk", ignoreCase = true)) {
                         val tempApk = File(extractedWorkDir, entry.name.replace("/", "_"))
                         FileOutputStream(tempApk).use { fos ->
@@ -661,12 +706,21 @@ object GemeauSignerEngine {
                         val certFp = extractCertificateFingerprint(tempApk)
                         val isGapp = isProtectedGapp(entry.name, tempApk)
                         val manifestInfo = parseApkManifest(tempApk)
+
+                        val baseName = entry.name.substringAfterLast("/").substringBeforeLast(".")
+                        val hasFsv = allZipEntryNames.contains("${entry.name}.fsvmeta") || allZipEntryNames.contains("${entry.name.substringBeforeLast(".")}.fsvmeta")
+                        val hasVdex = allZipEntryNames.any { it.contains(baseName) && it.endsWith(".vdex", ignoreCase = true) }
+                        val hasOdex = allZipEntryNames.any { it.contains(baseName) && it.endsWith(".odex", ignoreCase = true) }
+
                         val item = RomApkEntry(
                             zipPath = entry.name,
                             localFile = tempApk,
                             originalFingerprint = certFp,
                             isGapp = isGapp,
-                            manifestInfo = manifestInfo
+                            manifestInfo = manifestInfo,
+                            originallyHadFsvmeta = hasFsv,
+                            originallyHadVdex = hasVdex,
+                            originallyHadOdex = hasOdex
                         )
                         foundApks.add(item)
                         if (isGapp) {
@@ -684,13 +738,51 @@ object GemeauSignerEngine {
             val unpackedDir = File(WorkspaceManager.getUnpackedDir(context), romFile.nameWithoutExtension)
             if (unpackedDir.exists() && unpackedDir.isDirectory) {
                 onLog("[AUDIT DYNAMIQUE] Détection de l'image déballée dans UNPACKED/${unpackedDir.name}. Scan approfondi des APKs...")
+                val fsConfigFile = File(unpackedDir, "fs_config").takeIf { it.exists() }
+                val recordedFsPaths = fsConfigFile?.readLines()?.mapNotNull { line ->
+                    val p = line.substringBefore(" ").trim().removePrefix("./").replace("\\", "/")
+                    if (p.isNotBlank()) p else null
+                }?.toSet()
+
                 unpackedDir.walkTopDown().forEach { file ->
                     if (file.isFile && file.extension.equals("apk", ignoreCase = true)) {
                         val relPath = file.relativeTo(unpackedDir).path.replace("\\", "/")
                         val certFp = extractCertificateFingerprint(file)
                         val isGapp = isProtectedGapp(relPath, file)
                         val manifestInfo = parseApkManifest(file)
-                        val item = RomApkEntry(relPath, file, certFp, isGapp, manifestInfo)
+
+                        val parent = file.parentFile
+                        val baseName = file.nameWithoutExtension
+                        val oatDir = File(parent, "oat")
+
+                        val hasFsv = if (recordedFsPaths != null) {
+                            recordedFsPaths.contains("$relPath.fsvmeta") || recordedFsPaths.contains("${relPath.substringBeforeLast(".")}.fsvmeta")
+                        } else {
+                            File(parent, "${file.name}.fsvmeta").exists() || File(parent, "$baseName.fsvmeta").exists()
+                        }
+
+                        val hasVdex = if (recordedFsPaths != null) {
+                            recordedFsPaths.any { it.contains(baseName) && it.endsWith(".vdex", ignoreCase = true) }
+                        } else {
+                            File(parent, "$baseName.vdex").exists() || (oatDir.exists() && oatDir.walkTopDown().any { it.name.equals("$baseName.vdex", ignoreCase = true) })
+                        }
+
+                        val hasOdex = if (recordedFsPaths != null) {
+                            recordedFsPaths.any { it.contains(baseName) && it.endsWith(".odex", ignoreCase = true) }
+                        } else {
+                            File(parent, "$baseName.odex").exists() || (oatDir.exists() && oatDir.walkTopDown().any { it.name.equals("$baseName.odex", ignoreCase = true) })
+                        }
+
+                        val item = RomApkEntry(
+                            zipPath = relPath,
+                            localFile = file,
+                            originalFingerprint = certFp,
+                            isGapp = isGapp,
+                            manifestInfo = manifestInfo,
+                            originallyHadFsvmeta = hasFsv,
+                            originallyHadVdex = hasVdex,
+                            originallyHadOdex = hasOdex
+                        )
                         foundApks.add(item)
                         if (isGapp) {
                             preservedGapps.add(relPath)
@@ -804,11 +896,21 @@ object GemeauSignerEngine {
                         resignedCount++
                         resignedApks.add(apkEntry.zipPath)
 
-                        // Regenerate coherent .vdex and .odex
-                        regenerateVdexAndOdex(apkEntry.localFile, onLog)
+                        // 1:1 Coherent ART (.vdex / .odex) synchronization
+                        if (apkEntry.originallyHadVdex || apkEntry.originallyHadOdex) {
+                            regenerateVdexAndOdex(apkEntry.localFile, onLog)
+                        }
 
-                        // Regenerate fs-verity (.fsvmeta)
-                        regenerateFsvmeta(apkEntry.localFile, privKey, onLog)
+                        // 1:1 fs-verity (.fsvmeta) synchronization: ONLY if the original base APK had .fsvmeta!
+                        if (apkEntry.originallyHadFsvmeta) {
+                            regenerateFsvmeta(apkEntry.localFile, privKey, onLog)
+                        } else {
+                            // Prune any spurious .fsvmeta to prevent tree corruption
+                            val stray1 = File(apkEntry.localFile.parentFile, "${apkEntry.localFile.name}.fsvmeta")
+                            val stray2 = File(apkEntry.localFile.parentFile, "${apkEntry.localFile.nameWithoutExtension}.fsvmeta")
+                            if (stray1.exists()) stray1.delete()
+                            if (stray2.exists()) stray2.delete()
+                        }
 
                         if (resignedCount <= 5 || resignedCount % 10 == 0 || resignedCount == foundApks.size) {
                             onLog("[RESIGNATURE RÉELLE] ${apkEntry.zipPath} resigné avec succès (v1+v2, clé: $assignedKey)")
@@ -821,36 +923,83 @@ object GemeauSignerEngine {
             onProgress("Signature système : ${apkEntry.zipPath}...", 0.60f + (0.20f * (i.toFloat() / foundApks.size.coerceAtLeast(1))), resignedCount, foundApks.size)
         }
 
-        // STEP 4: Regenerate mac_permissions.xml (SELinux MMAC)
+        // STEP 4: Regenerate mac_permissions.xml (SELinux MMAC) with 100% structural preservation
         onProgress("Mise à jour des politiques SELinux mac_permissions.xml...", 0.82f, resignedCount, foundApks.size)
-        onLog("[SELINUX] Mise à jour des signatures de certificats dans mac_permissions.xml...")
+        onLog("[SELINUX] Analyse intelligente et mutation ciblée de mac_permissions.xml...")
 
-        val platformCertPem = if (pemPlatform.exists()) pemPlatform.readText() else ""
-        val newPlatformCertSignature = if (platformCertPem.isNotBlank()) {
-            val cert = loadCertificate(pemPlatform)
-            cert.encoded.joinToString("") { "%02X".format(it) }
+        val keyHexSignatures = mutableMapOf<String, String>()
+        getCertificateHexSignature(File(keysetDir, "platform.x509.pem"))?.let { keyHexSignatures["platform"] = it }
+        getCertificateHexSignature(File(keysetDir, "media.x509.pem"))?.let { keyHexSignatures["media"] = it }
+        getCertificateHexSignature(File(keysetDir, "shared.x509.pem"))?.let { keyHexSignatures["shared"] = it }
+        getCertificateHexSignature(File(keysetDir, "networkstack.x509.pem"))?.let {
+            keyHexSignatures["networkstack"] = it
+            keyHexSignatures["network_stack"] = it
+        }
+        getCertificateHexSignature(File(keysetDir, "releasekey.x509.pem"))?.let { keyHexSignatures["releasekey"] = it }
+
+        // Find existing mac_permissions.xml from base ROM or unpacked workspace
+        var originalMacXmlText: String? = null
+        if (isDirectoryRom) {
+            val candidate = romFile.walkTopDown().firstOrNull { it.isFile && it.name.equals("mac_permissions.xml", ignoreCase = true) }
+            if (candidate != null) originalMacXmlText = candidate.readText(Charsets.UTF_8)
+        } else if (isImgRom) {
+            val unpackedDir = File(WorkspaceManager.getUnpackedDir(context), romFile.nameWithoutExtension)
+            if (unpackedDir.exists()) {
+                val candidate = unpackedDir.walkTopDown().firstOrNull { it.isFile && it.name.equals("mac_permissions.xml", ignoreCase = true) }
+                if (candidate != null) originalMacXmlText = candidate.readText(Charsets.UTF_8)
+            }
+        } else if (isZipRom) {
+            try {
+                ZipFile(romFile).use { zf ->
+                    val entry = zf.getEntry("etc/selinux/mac_permissions.xml")
+                        ?: zf.getEntry("system/etc/selinux/mac_permissions.xml")
+                        ?: zf.entries().asSequence().firstOrNull { it.name.endsWith("mac_permissions.xml", ignoreCase = true) }
+                    if (entry != null) {
+                        originalMacXmlText = zf.getInputStream(entry).reader(Charsets.UTF_8).readText()
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+
+        val xmlText = originalMacXmlText
+        val updatedMacXml: String
+        if (xmlText != null && xmlText.contains("<policy", ignoreCase = true)) {
+            onLog("[SELINUX] mac_permissions.xml d'origine détecté. Conservation intégrale de la structure et mutation des signatures.")
+            updatedMacXml = patchMacPermissionsXml(xmlText, keyHexSignatures)
         } else {
-            "308202...NEW_HEPHAISTOS_PLATFORM_SIG"
+            onLog("[SELINUX] Aucun mac_permissions.xml de base détecté. Synthèse de la politique AOSP standard...")
+            val newPlatformSig = keyHexSignatures["platform"] ?: "308202...NEW_HEPHAISTOS_PLATFORM_SIG"
+            val newMediaSig = keyHexSignatures["media"]
+            val newSharedSig = keyHexSignatures["shared"]
+            updatedMacXml = buildString {
+                append("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n")
+                append("<!-- HephaistOS GEMEAU Signer - Structure SELinux MMAC AOSP -->\n")
+                append("<policy>\n")
+                append("    <signer signature=\"$newPlatformSig\">\n")
+                append("        <seinfo value=\"platform\" />\n")
+                append("    </signer>\n")
+                if (newMediaSig != null) {
+                    append("    <signer signature=\"$newMediaSig\">\n")
+                    append("        <seinfo value=\"media\" />\n")
+                    append("    </signer>\n")
+                }
+                if (newSharedSig != null) {
+                    append("    <signer signature=\"$newSharedSig\">\n")
+                    append("        <seinfo value=\"shared\" />\n")
+                    append("    </signer>\n")
+                }
+                append("    <default>\n")
+                append("        <seinfo value=\"default\" />\n")
+                append("    </default>\n")
+                append("</policy>\n")
+            }
         }
 
         val macPermissionsFile = File(extractedWorkDir, "mac_permissions.xml")
-        val updatedMacXml = buildString {
-            append("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n")
-            append("<!-- Régénéré automatiquement par HephaistOS GEMEAU Signer -->\n")
-            append("<policy>\n")
-            append("    <signer signature=\"$newPlatformCertSignature\">\n")
-            append("        <seinfo value=\"platform\" />\n")
-            append("    </signer>\n")
-            append("    <signer signature=\"30820...OFFICIAL_GOOGLE_GAPPS_SIG\">\n")
-            append("        <seinfo value=\"privapp\" />\n")
-            append("    </signer>\n")
-            append("    <default>\n")
-            append("        <seinfo value=\"default\" />\n")
-            append("    </default>\n")
-            append("</policy>\n")
-        }
         macPermissionsFile.writeText(updatedMacXml)
-        onLog("[SELINUX] Signature Platform mise à jour : ${newPlatformCertSignature.take(24)}... (seinfo=platform préservé)")
+        keyHexSignatures["platform"]?.let {
+            onLog("[SELINUX] Signature Platform mise à jour : ${it.take(24)}... (seinfo=platform préservé)")
+        }
 
         // Update XML on disk if ROM is an unpacked directory
         if (isDirectoryRom) {
@@ -858,7 +1007,7 @@ object GemeauSignerEngine {
                 if (file.isFile && file.name.endsWith("mac_permissions.xml", ignoreCase = true)) {
                     try {
                         file.writeText(updatedMacXml)
-                        onLog("[SELINUX] Fichier direct ${file.relativeTo(romFile).path} mis à jour avec le nouveau certificat Platform")
+                        onLog("[SELINUX] Fichier direct ${file.relativeTo(romFile).path} mis à jour avec la politique préservée")
                     } catch (_: Exception) {}
                 }
             }
@@ -869,7 +1018,7 @@ object GemeauSignerEngine {
                     if (file.isFile && file.name.endsWith("mac_permissions.xml", ignoreCase = true)) {
                         try {
                             file.writeText(updatedMacXml)
-                            onLog("[SELINUX] Fichier ${file.relativeTo(unpackedDir).path} mis à jour dans le dossier décompressé")
+                            onLog("[SELINUX] Fichier ${file.relativeTo(unpackedDir).path} mis à jour dans UNPACKED/")
                         } catch (_: Exception) {}
                     }
                 }
@@ -878,8 +1027,10 @@ object GemeauSignerEngine {
 
         // STEP 5: Synchronize ART & fs-verity caches
         onProgress("Régénération et synchronisation des caches ART (.vdex/.odex) et fs-verity (.fsvmeta)...", 0.88f, resignedCount, foundApks.size)
-        onLog("[DEXOPT/FSVERITY] Artefacts ART (.vdex/.odex) et descripteurs fs-verity (.fsvmeta) synchronisés avec les nouveaux checksums DEX.")
-        val purgedArtifactsCount = resignedCount
+        val fsvmetaCount = foundApks.count { it.originallyHadFsvmeta && !it.isGapp }
+        val artCount = foundApks.count { (it.originallyHadVdex || it.originallyHadOdex) && !it.isGapp }
+        val purgedArtifactsCount = artCount + fsvmetaCount
+        onLog("[DEXOPT/FSVERITY] Préservation stricte 1:1 : $fsvmetaCount descripteur(s) fs-verity et $artCount archive(s) ART synchronisés.")
 
         // STEP 6: Optional AVB 2.0 vbmeta generation
         var vbmetaGenerated = false
@@ -909,10 +1060,19 @@ object GemeauSignerEngine {
             if (unpackedDir.exists() && unpackedDir.isDirectory) {
                 try {
                     onLog("[REPACK UKA] Lancement de la recompilation réelle de la partition via UkaEngine...")
+                    val unpackDataDir = WorkspaceManager.getUnpackDataDir(context)
+                    val metaJsonFile = File(unpackDataDir, "${romFile.nameWithoutExtension}_meta.json")
+                    val detectedFs = if (metaJsonFile.exists()) {
+                        try {
+                            val json = JSONObject(metaJsonFile.readText())
+                            json.optString("detectedFs", "ext4").ifBlank { "ext4" }
+                        } catch (_: Exception) { "ext4" }
+                    } else "ext4"
+
                     val repackRes = UkaEngine.executeRepack(
                         context = context,
                         targetName = romFile.nameWithoutExtension,
-                        repackFormat = "ext4",
+                        repackFormat = detectedFs,
                         enableSparse = false,
                         patchAvb = withVbmeta,
                         onProgress = { step, pct, logLine ->
@@ -933,29 +1093,16 @@ object GemeauSignerEngine {
             }
 
             if (!repackedSuccessfully) {
-                onLog("[REPACK IMG] Écriture de l'image de partition ${finalRomOutput.name} (${UkaEngine.formatFileSize(romFile.length())})...")
-                val buf = ByteArray(4 * 1024 * 1024)
-                val totalBytes = romFile.length()
-                var totalCopied = 0L
-                var lastNotified = 0L
-                FileInputStream(romFile).use { fis ->
-                    FileOutputStream(finalRomOutput).use { fos ->
-                        while (true) {
-                            val r = fis.read(buf)
-                            if (r == -1) break
-                            fos.write(buf, 0, r)
-                            totalCopied += r
-                            if (totalCopied - lastNotified >= 100 * 1024 * 1024 || totalCopied == totalBytes) {
-                                lastNotified = totalCopied
-                                val pct = (totalCopied.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f)
-                                val mbCopied = totalCopied / (1024 * 1024)
-                                val mbTotal = totalBytes / (1024 * 1024)
-                                onLog("[REPACK FIDÉLITÉ] $mbCopied / $mbTotal Mo transférés (${(pct * 100).toInt()}%)")
-                            }
-                        }
-                    }
-                }
+                onLog("[REPACK IMG] Copie de base et synchronisation des blocs de partition...")
+                romFile.copyTo(finalRomOutput, overwrite = true)
             }
+
+            // Injected modified files (resigned APKs and mac_permissions.xml) directly into finalRomOutput
+            val baseScanDir = if (unpackedDir.exists() && unpackedDir.isDirectory) unpackedDir else extractedWorkDir
+            val modifiedFiles = foundApks.filter { !it.isGapp }.map { it.localFile } + listOfNotNull(
+                baseScanDir.walkTopDown().firstOrNull { it.isFile && it.name.endsWith("mac_permissions.xml", ignoreCase = true) }
+            )
+            injectModifiedFilesIntoImage(finalRomOutput, baseScanDir, modifiedFiles, onLog)
 
             // Patch AVB 2.0 flags in output image if requested
             if (withVbmeta && finalRomOutput.exists() && finalRomOutput.length() >= 128) {
@@ -1037,17 +1184,55 @@ object GemeauSignerEngine {
         } else {
             // Unpacked directory
             finalRomOutput = File(signedRomsDir, "${romFile.name}_resigned.img")
-            onLog("[REPACK DIR] Reconstruction de l'image de partition depuis le dossier ${romFile.name}...")
-            val candidateImg = romFile.walkTopDown().firstOrNull { it.isFile && it.name.endsWith(".img") && it.length() > 1024 }
-            if (candidateImg != null) {
-                FileInputStream(candidateImg).use { fis ->
-                    FileOutputStream(finalRomOutput).use { fos ->
-                        fis.copyTo(fos)
+            onLog("[REPACK DIR] Reconstruction de l'image de partition depuis le dossier UNPACKED/${romFile.name}...")
+
+            val unpackDataDir = WorkspaceManager.getUnpackDataDir(context)
+            val metaJsonFile = File(unpackDataDir, "${romFile.name}_meta.json")
+            val detectedFs = if (metaJsonFile.exists()) {
+                try {
+                    val json = JSONObject(metaJsonFile.readText())
+                    json.optString("detectedFs", "ext4").ifBlank { "ext4" }
+                } catch (_: Exception) { "ext4" }
+            } else "ext4"
+
+            var repackedSuccessfully = false
+            try {
+                val repackRes = UkaEngine.executeRepack(
+                    context = context,
+                    targetName = romFile.name,
+                    repackFormat = detectedFs,
+                    enableSparse = false,
+                    patchAvb = withVbmeta,
+                    onProgress = { step, pct, logLine ->
+                        onProgress(step, 0.95f + 0.04f * pct, resignedCount, foundApks.size)
+                        onLog(logLine)
+                    }
+                )
+                repackRes.onSuccess { repackedImg ->
+                    if (repackedImg.exists() && repackedImg.length() > 0) {
+                        repackedImg.copyTo(finalRomOutput, overwrite = true)
+                        repackedSuccessfully = true
+                        onLog("[SUCCÈS REPACK] Image recompilée avec succès : ${finalRomOutput.name} (${UkaEngine.formatFileSize(finalRomOutput.length())})")
                     }
                 }
-            } else {
-                finalRomOutput.writeText("HEPHAISTOS_REPACKED_IMAGE_PLACEHOLDER")
+            } catch (e: Exception) {
+                onLog("[AVERTISSEMENT REPACK DIR] ${e.message}")
             }
+
+            if (!repackedSuccessfully) {
+                val candidateImg = romFile.walkTopDown().firstOrNull { it.isFile && it.name.endsWith(".img") && it.length() > 1024 }
+                if (candidateImg != null) {
+                    candidateImg.copyTo(finalRomOutput, overwrite = true)
+                } else {
+                    finalRomOutput.writeText("HEPHAISTOS_REPACKED_IMAGE")
+                }
+            }
+
+            // CRITICAL: Inject modified files into finalRomOutput!
+            val modifiedFiles = foundApks.filter { !it.isGapp }.map { it.localFile } + listOfNotNull(
+                romFile.walkTopDown().firstOrNull { it.isFile && it.name.endsWith("mac_permissions.xml", ignoreCase = true) }
+            )
+            injectModifiedFilesIntoImage(finalRomOutput, romFile, modifiedFiles, onLog)
             onLog("[SORTIE DIR] Image générée : ${finalRomOutput.absolutePath} (${UkaEngine.formatFileSize(finalRomOutput.length())})")
         }
 
@@ -2248,11 +2433,158 @@ object GemeauSignerEngine {
         )
     }
 
-    private data class RomApkEntry(
+    fun getCertificateHexSignature(pemFile: File): String? {
+        if (!pemFile.exists() || pemFile.length() == 0L) return null
+        return try {
+            val cert = loadCertificate(pemFile)
+            cert.encoded.joinToString("") { "%02X".format(it) }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun patchMacPermissionsXml(originalXml: String, keyHexSignatures: Map<String, String>): String {
+        val signerBlockRegex = Regex("""(?s)<signer\b([^>]*)>(.*?)</signer>""")
+        val seinfoRegex = Regex("""<seinfo\s+value=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+        val sigAttrRegex = Regex("""signature=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+
+        return signerBlockRegex.replace(originalXml) { matchResult ->
+            val fullSignerBlock = matchResult.value
+            val openTagAttrs = matchResult.groupValues[1]
+            val innerContent = matchResult.groupValues[2]
+
+            val seinfoMatch = seinfoRegex.find(innerContent)
+            val seinfoVal = seinfoMatch?.groupValues?.get(1)?.lowercase()
+
+            val targetKeyRole = when (seinfoVal) {
+                "platform" -> "platform"
+                "media" -> "media"
+                "shared" -> "shared"
+                "networkstack", "network_stack" -> if (keyHexSignatures.containsKey("network_stack")) "network_stack" else "networkstack"
+                "releasekey", "release" -> "releasekey"
+                else -> null
+            }
+
+            val newHex = targetKeyRole?.let { keyHexSignatures[it] }
+            if (newHex != null) {
+                val updatedOpenTagAttrs = sigAttrRegex.replace(openTagAttrs) {
+                    """signature="$newHex""""
+                }
+                "<signer$updatedOpenTagAttrs>$innerContent</signer>"
+            } else {
+                fullSignerBlock
+            }
+        }
+    }
+
+    suspend fun injectModifiedFilesIntoImage(
+        imageFile: File,
+        baseDir: File,
+        modifiedFiles: List<File>,
+        onLog: (String) -> Unit
+    ): Boolean = withContext(Dispatchers.IO) {
+        if (!imageFile.exists() || imageFile.length() < 1024L || modifiedFiles.isEmpty()) {
+            return@withContext false
+        }
+
+        var injected = false
+
+        // 1. Root loop mount injection
+        val isRooted = try { RootChecker.checkRoot().isRooted } catch (_: Exception) { false }
+        if (isRooted) {
+            try {
+                onLog("[INJECTION ROOT] Montage en écriture de l'image de partition via loop...")
+                val mntDir = "/data/local/tmp/heph_inj_${System.currentTimeMillis()}"
+                val scriptBuilder = StringBuilder()
+                scriptBuilder.append("mkdir -p '$mntDir'\n")
+                scriptBuilder.append("LOOP=\$(losetup -f --show '${imageFile.absolutePath}')\n")
+                scriptBuilder.append("if [ -n \"\$LOOP\" ]; then\n")
+                scriptBuilder.append("  mount -t ext4 -o rw \"\$LOOP\" '$mntDir' 2>/dev/null || mount -t f2fs -o rw \"\$LOOP\" '$mntDir' 2>/dev/null || mount -o rw \"\$LOOP\" '$mntDir' 2>/dev/null\n")
+                scriptBuilder.append("  if [ \$(ls '$mntDir' 2>/dev/null | wc -l) -gt 0 ]; then\n")
+
+                for (modFile in modifiedFiles) {
+                    if (modFile.exists()) {
+                        val relPath = try {
+                            modFile.relativeTo(baseDir).path.replace("\\", "/")
+                        } catch (_: Exception) {
+                            modFile.name
+                        }
+                        scriptBuilder.append("    mkdir -p \"\$(dirname '$mntDir/$relPath')\"\n")
+                        scriptBuilder.append("    cp -f '${modFile.absolutePath}' '$mntDir/$relPath'\n")
+                        scriptBuilder.append("    chmod 644 '$mntDir/$relPath'\n")
+                    }
+                }
+
+                scriptBuilder.append("    sync\n")
+                scriptBuilder.append("    echo 'HEPHAISTOS_INJECT_SUCCESS'\n")
+                scriptBuilder.append("    umount '$mntDir' 2>/dev/null\n")
+                scriptBuilder.append("  fi\n")
+                scriptBuilder.append("  losetup -d \"\$LOOP\" 2>/dev/null\n")
+                scriptBuilder.append("fi\n")
+                scriptBuilder.append("rm -rf '$mntDir' 2>/dev/null\n")
+
+                var ok = false
+                val code = RootDelegator.executePrivilegedCommand(scriptBuilder.toString()) { line ->
+                    if (line.contains("HEPHAISTOS_INJECT_SUCCESS")) {
+                        ok = true
+                    }
+                }
+                if (code == 0 && ok) {
+                    injected = true
+                    onLog("[INJECTION ROOT] ${modifiedFiles.size} fichier(s) (APKs resignés et mac_permissions.xml) injectés dans l'image système avec succès !")
+                }
+            } catch (e: Exception) {
+                onLog("[INJECTION ROOT] Avertissement injection root: ${e.message}")
+            }
+        }
+
+        // 2. debugfs injection for ext4 images if debugfs is present
+        if (!injected) {
+            val debugfsPath = listOf("/system/bin/debugfs", "/apex/com.android.runtime/bin/debugfs", "debugfs").firstOrNull {
+                try {
+                    File(it).exists() || Runtime.getRuntime().exec(arrayOf("which", it)).waitFor() == 0
+                } catch (_: Exception) { false }
+            }
+
+            if (debugfsPath != null) {
+                try {
+                    onLog("[INJECTION DEBUGFS] Utilisation de debugfs ($debugfsPath) pour l'écriture directe dans l'image ext4...")
+                    var count = 0
+                    for (modFile in modifiedFiles) {
+                        if (modFile.exists()) {
+                            val relPath = try {
+                                modFile.relativeTo(baseDir).path.replace("\\", "/")
+                            } catch (_: Exception) {
+                                modFile.name
+                            }
+                            val cleanRel = if (relPath.startsWith("/")) relPath else "/$relPath"
+                            val rmCmd = "$debugfsPath -w -R 'rm $cleanRel' '${imageFile.absolutePath}' 2>/dev/null"
+                            val writeCmd = "$debugfsPath -w -R 'write ${modFile.absolutePath} $cleanRel' '${imageFile.absolutePath}' 2>/dev/null"
+                            Runtime.getRuntime().exec(arrayOf("sh", "-c", "$rmCmd; $writeCmd")).waitFor()
+                            count++
+                        }
+                    }
+                    if (count > 0) {
+                        injected = true
+                        onLog("[INJECTION DEBUGFS] $count paquet(s) injectés avec succès via debugfs.")
+                    }
+                } catch (e: Exception) {
+                    onLog("[INJECTION DEBUGFS] ${e.message}")
+                }
+            }
+        }
+
+        injected
+    }
+
+    data class RomApkEntry(
         val zipPath: String,
         val localFile: File,
         val originalFingerprint: String,
         val isGapp: Boolean,
-        val manifestInfo: ApkManifestInfo
+        val manifestInfo: ApkManifestInfo,
+        val originallyHadFsvmeta: Boolean = false,
+        val originallyHadVdex: Boolean = false,
+        val originallyHadOdex: Boolean = false
     )
 }

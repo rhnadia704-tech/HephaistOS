@@ -28,11 +28,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Analytics
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VpnKey
+import androidx.compose.material.icons.outlined.Analytics
 import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Memory
@@ -212,6 +214,18 @@ fun HephaistNavRail(
                     isExpanded = isExpanded,
                     testTag = "nav_gemeau_button",
                     onClick = { onScreenSelected(Screen.GEMEAU) }
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                NavRailItem(
+                    label = "Analyst",
+                    selected = currentScreen == Screen.ANALYST && !isPlusDrawerOpen,
+                    selectedIcon = Icons.Filled.Analytics,
+                    unselectedIcon = Icons.Outlined.Analytics,
+                    isExpanded = isExpanded,
+                    testTag = "nav_analyst_button",
+                    onClick = { onScreenSelected(Screen.ANALYST) }
                 )
 
                 Spacer(modifier = Modifier.height(8.dp))

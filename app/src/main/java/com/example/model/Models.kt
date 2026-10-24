@@ -5,6 +5,7 @@ enum class Screen(val title: String) {
     UNPACK_REPACK("Unpack / Repack"),
     EXTRACTOR("Extractor"),
     GEMEAU("Géméau"),
+    ANALYST("Analyst"),
     AHE_EXTENSION("Extension .ahe"),
     SETTINGS("Paramètres")
 }

@@ -125,4 +125,67 @@ class GemeauSignerEngineTest {
         tempDir.deleteRecursively()
         }
     }
+
+    @Test
+    fun testPatchMacPermissionsXmlPreservesStructureAndReplacesTargetSigners() {
+        val originalOemXml = """
+            <?xml version="1.0" encoding="utf-8"?>
+            <!-- Custom OEM SELinux MMAC Policy definition -->
+            <policy>
+                <!-- Platform Key -->
+                <signer signature="ORIGINAL_OLD_PLATFORM_HEX_SIG">
+                    <seinfo value="platform" />
+                </signer>
+
+                <!-- Media Key -->
+                <signer signature="ORIGINAL_OLD_MEDIA_HEX_SIG">
+                    <seinfo value="media" />
+                </signer>
+
+                <!-- OEM Protected Telecom Service -->
+                <signer signature="OFFICIAL_OEM_TELECOM_HEX_SIG">
+                    <seinfo value="oem_telecom" />
+                    <package name="com.oem.telecom">
+                        <seinfo value="oem_telecom" />
+                    </package>
+                </signer>
+
+                <!-- Shared Key -->
+                <signer signature="ORIGINAL_OLD_SHARED_HEX_SIG">
+                    <seinfo value="shared" />
+                </signer>
+
+                <default>
+                    <seinfo value="default" />
+                </default>
+            </policy>
+        """.trimIndent()
+
+        val keysetHexMap = mapOf(
+            "platform" to "NEW_HEPHAISTOS_PLATFORM_HEX_123456",
+            "media" to "NEW_HEPHAISTOS_MEDIA_HEX_654321",
+            "shared" to "NEW_HEPHAISTOS_SHARED_HEX_789012",
+            "network_stack" to "NEW_HEPHAISTOS_NETSTACK_HEX_345678"
+        )
+
+        val patchedXml = GemeauSignerEngine.patchMacPermissionsXml(originalOemXml, keysetHexMap)
+
+        // 1. Verify Platform signature is updated
+        assertTrue("Platform signature must be updated", patchedXml.contains("NEW_HEPHAISTOS_PLATFORM_HEX_123456"))
+        assertTrue("Platform seinfo must be preserved", patchedXml.contains("<seinfo value=\"platform\" />"))
+
+        // 2. Verify Media signature is updated
+        assertTrue("Media signature must be updated", patchedXml.contains("NEW_HEPHAISTOS_MEDIA_HEX_654321"))
+
+        // 3. Verify Shared signature is updated
+        assertTrue("Shared signature must be updated", patchedXml.contains("NEW_HEPHAISTOS_SHARED_HEX_789012"))
+
+        // 4. Verify OEM Telecom signature is 100% PRESERVED
+        assertTrue("OEM Telecom signature must remain intact", patchedXml.contains("OFFICIAL_OEM_TELECOM_HEX_SIG"))
+        assertTrue("OEM Telecom package rule must remain intact", patchedXml.contains("<package name=\"com.oem.telecom\">"))
+
+        // 5. Verify comments and header are preserved
+        assertTrue("Comments must remain intact", patchedXml.contains("<!-- Custom OEM SELinux MMAC Policy definition -->"))
+        assertTrue("Default tag must remain intact", patchedXml.contains("<seinfo value=\"default\" />"))
+    }
 }

@@ -1,6 +1,6 @@
 {
-  "summary":  "Plan d'implémentation pour l'infrastructure d'outils natifs Rust haute performance via GitHub Actions pour HéphaïstOS GÉMÉAU :\n- Création du projet natif Rust `tools/gemeau-dissector` dédié à l'analyse approfondie de cibles ROM (chaînes de confiance, SELinux MMAC, permissions, structures ART .vdex/.odex, fs-verity).\n- Configuration du workflow GitHub Actions `.github/workflows/build-tools.yml` cross-compilant les binaires Rust pour Android (aarch64, armv7, x86_64) et les intégrant automatiquement dans les assets de l'APK.\n- Structuration complète et extraction automatique de `/sdcard/HEPHAISTOS/TOOLS/` (dossiers bin, scripts, profiles, rules) et mise en cache exécutable dans l'application.\n- Génération d'une base de données d'audit complète et riche (pouvant atteindre plusieurs mégaoctets) dans `/sdcard/HEPHAISTOS/DATA/GEMEAU/`.\n- Passerelle d'interopérabilité fluide entre l'interface GÉMÉAU, le moteur natif Rust et le moteur Kotlin intégré.",
-  "updatedAt":  "2026-10-24T08:56:03.242818095Z",
+  "summary":  "Plan de mise en œuvre de la nouvelle fonctionnalité ANALYST dans HephaistOS :\n- Création du moteur d'analyse exhaustif `AnalystEngine` (arborescence intégrale, audit cryptographique complet APK/APEX selon le gabarit exact, dissection ELF des bibliothèques .so et HALs)\n- Organisation de la base de données factuelle et modulaire dans `sdcard/HEPHAISTOS/ANALYST/<cible>/`\n- Interface utilisateur dédiée avec sélection déroulante des projets UNPACKED et déclenchement d'analyse\n- Intégration dans la navigation HephaistOS et tests unitaires automatisés",
+  "updatedAt":  "2026-10-24T10:37:38.934808151Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

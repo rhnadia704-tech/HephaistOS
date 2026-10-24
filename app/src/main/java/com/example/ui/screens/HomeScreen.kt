@@ -90,6 +90,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.material.icons.filled.Analytics
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.OpenInNew
@@ -112,6 +113,7 @@ fun HomeScreen(
     onNavigateToUnpackRepack: () -> Unit = {},
     onNavigateToExtractor: () -> Unit = {},
     onNavigateToGemeau: () -> Unit = {},
+    onNavigateToAnalyst: () -> Unit = {},
     onOpenExtension: (AheExtension) -> Unit = {},
     onOpenPlusDrawer: () -> Unit = {},
     onRefresh: () -> Unit,
@@ -165,6 +167,13 @@ fun HomeScreen(
             item {
                 GemeauQuickCard(
                     onOpenModule = onNavigateToGemeau
+                )
+            }
+
+            // ANALYST Card: Factual ROM inspection & APK signatures
+            item {
+                AnalystQuickCard(
+                    onOpenModule = onNavigateToAnalyst
                 )
             }
 
@@ -1360,6 +1369,82 @@ fun GemeauQuickCard(
                     )
                     Text(
                         text = "Keysets, SignAPK & ROMsign",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Button(
+                onClick = onOpenModule,
+                shape = RoundedCornerShape(10.dp),
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                modifier = Modifier.height(36.dp)
+            ) {
+                Text("Ouvrir", style = MaterialTheme.typography.labelMedium)
+                Spacer(modifier = Modifier.width(4.dp))
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                    contentDescription = null,
+                    modifier = Modifier.size(14.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun AnalystQuickCard(
+    onOpenModule: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    ElevatedCard(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(onClick = onOpenModule)
+            .testTag("home_analyst_card"),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+        ),
+        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(42.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.primaryContainer),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Analytics,
+                        contentDescription = "Analyst",
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.width(14.dp))
+                Column {
+                    Text(
+                        text = "Analyst",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "Audit factuel & Signatures v16 (36)",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

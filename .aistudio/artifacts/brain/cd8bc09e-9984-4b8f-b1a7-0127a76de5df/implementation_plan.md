@@ -1,115 +1,101 @@
-# Plan d'Implémentation : Outillage Natif Rust Haute Performance via GitHub Actions & Analyse Approfondie GÉMÉAU
+# Plan d'Implémentation : Module ANALYST (Audit d'Arborescence, Signatures Exhaustives & HALs)
 
-Ce plan définit l'infrastructure permettant à HéphaïstOS de disposer d'outils natifs ultra-puissants développés en **Rust**, compilés lors du push via **GitHub Actions**, intégrés directement dans l'APK et déployés de manière structurée dans `/sdcard/HEPHAISTOS/TOOLS/`. Ces outils alimenteront une base de données d'audit riche et exhaustive de plusieurs mégaoctets dans `/sdcard/HEPHAISTOS/DATA/GEMEAU/`.
-
----
-
-## 1. Architecture Générale
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                       GITHUB ACTIONS                        │
-│  - Cross-compilation Rust (aarch64, armv7, x86_64)          │
-│  - Génération des binaires strip/LTO haute performance      │
-│  - Injection dans app/src/main/assets/tools/bin/            │
-│  - Compilation de l'APK HéphaïstOS avec outillage inclus    │
-└──────────────────────────────┬──────────────────────────────┘
-                               │ (Installation / Premier lancement)
-                               ▼
-┌─────────────────────────────────────────────────────────────┐
-│                 HÉPHAÏSTOS WORKSPACE MANAGER                │
-│  - Auto-extraction vers /sdcard/HEPHAISTOS/TOOLS/           │
-│    ├── bin/       (Exécutables natifs : gemeau-dissector...) │
-│    ├── scripts/   (Scripts shell / bash d'orchestration)    │
-│    ├── profiles/  (Profils de cibles AOSP, MIUI, Lineage...)│
-│    └── rules/     (Schémas SELinux, MMAC, fs-verity)        │
-│  - Synchronisation miroir exécutable (context.filesDir/bin) │
-└──────────────────────────────┬──────────────────────────────┘
-                               │ (Lancement d'audit ROM / GÉMÉAU)
-                               ▼
-┌─────────────────────────────────────────────────────────────┐
-│           ANALYSE INTÉGRALE & BASE DE DONNÉES GÉMÉAU        │
-│  - Analyse cryptographique v1, v2, v3, v4                   │
-│  - Mappage des permissions, contextes SELinux & MMAC        │
-│  - Cartographie des dépendances ART (.vdex, .odex, .oat)    │
-│  - Génération de la base dans /sdcard/HEPHAISTOS/DATA/GEMEAU│
-└─────────────────────────────────────────────────────────────┘
-```
+Ce document formalise la conception et l'implémentation de la nouvelle fonctionnalité **ANALYST** dans HephaistOS. Ce module permet de disséquer complètement une partition ou ROM déballée dans `UNPACKED/`, d'auditer l'intégralité des signatures APK/APEX selon le gabarit précis demandé par l'utilisateur, et de cartographier tous les HALs, bibliothèques ELF et blobs propriétaires dans une base de données factuelle stockée dans `sdcard/HEPHAISTOS/ANALYST/`.
 
 ---
 
-## 2. Composants à Développer
+## 1. Objectifs et Spécifications
 
-### A. Projet Natif Rust (`tools/gemeau-dissector/`)
-Création d'un projet Rust de niveau professionnel dans le dépôt :
-- **`Cargo.toml`** : Configuration du workspace, dépendances (`sha2`, `rsa`, `zip`, `byteorder`, `serde_json`, etc.) avec profil de release optimisé (`opt-level = 3`, `lto = true`, `strip = true`).
-- **`src/main.rs`** : CLI acceptant les arguments `--rom-path <PATH>`, `--output-dir <PATH>`, `--format <json|markdown|db>`, `--deep-audit`.
-- **`src/crypto.rs`** :
-  - Décodeur d'APK Signing Block v2/v3/v4.
-  - Décodeur ASN.1 / X.509 de certificats et hachages Merkle tree fs-verity.
-- **`src/selinux.rs`** :
-  - Parseur de `mac_permissions.xml`, `file_contexts.bin`, `seapp_contexts`.
-  - Mappage des `seinfo` (`platform`, `media`, `shared`, `privapp`, `default`) et certificats signataires.
-- **`src/axml.rs`** :
-  - Parseur binaire rapide du StringPool et des éléments d'`AndroidManifest.xml` (paquet, `sharedUserId`, autorisations requises et définies).
-- **`src/art.rs`** :
-  - Inspection des fichiers `.vdex`, `.odex`, `.oat` (en-têtes, checksums DEX, architecture machine).
-- **`src/report.rs`** :
-  - Générateur de la base de données exhaustive JSON et du rapport Markdown complet d'audit.
+1. **Interface Utilisateur Épurée (Conforme au prompt)** :
+   - Champ déroulant listant tous les projets et partitions présents dans `sdcard/HEPHAISTOS/UNPACKED/`.
+   - Bouton d'action principal « LANCER L'ANALYSE ».
+   - Affichage de l'état d'avancement (progression, logs de scan en temps réel) et récapitulatif factuel avec raccourcis vers les fichiers générés.
+   - Enregistrement dans la navigation principale de l'application (HephaistNavRail, HomeScreen, Screen enum) aux côtés des autres fonctionnalités.
 
-### B. Workflow GitHub Actions (`.github/workflows/build-tools.yml`)
-Workflow automatisé déclenché sur chaque push :
-1. **Étape 1 : Setup de l'environnement** :
-   - Installation de Rust stable et des cibles Android (`aarch64-linux-android`, `armv7-linux-androideabi`, `x86_64-linux-android`).
-   - Configuration de `cargo-ndk` ou Android NDK cross-compilers.
-2. **Étape 2 : Compilation des outils natifs** :
-   - Compilation en mode release stripée pour les 3 architectures.
-   - Placement automatique des binaires produits dans `app/src/main/assets/tools/bin/<arch>/gemeau-dissector`.
-3. **Étape 3 : Empaquetage des ressources complémentaires** :
-   - Injection des scripts d'orchestration (`tools/scripts/`) dans `assets/tools/scripts/`.
-   - Injection des profils et règles de détection dans `assets/tools/profiles/` et `assets/tools/rules/`.
-4. **Étape 4 : Compilation de l'APK Android** :
-   - Exécution de `gradle assembleDebug` ou `assembleRelease` intégrant tous les assets natifs.
-   - Publication de l'APK et des binaires natifs en tant qu'artefacts de build téléchargeables.
+2. **Audit Cryptographique Exhaustif des APKs et APEX** :
+   - Scan de 100% des APKs et APEX du système (`/system`, `/system_ext`, `/product`, `/vendor`, `/apex`).
+   - Détection des schémas de signature actifs : V1 (JAR Scheme), V2 (APK Signature Scheme v2), V3 (APK Signature Scheme v3).
+   - Extraction de chaque certificat X.509 présent et restitution selon le gabarit textuel exact :
+     - *Vérification de la signature: Interface v16 (36)*
+     - *Chemin: /path/to/app.apk*
+     - *Schéma de signature : V1 + V2 + V3*
+     - *CERTIFICAT №1 : Type, Version, Numéro de série, Propriétaire (Subject DN), Émetteur (Issuer DN), Validité (dates), Algorithme.*
+     - *Code de hachage, Signature CRC32, MD5, SHA-1, SHA-224, SHA-256, SHA-384, SHA-512.*
+     - *Base64 du certificat, Bits de signature (hexadécimal), Clé publique (OpenSSL / RSA / EC), Base64 de signature.*
 
-### C. Gestionnaire d'Outillage & Déploiement (`WorkspaceManager.kt`)
-Mise à niveau de `WorkspaceManager` pour administrer `/sdcard/HEPHAISTOS/TOOLS/` :
-- Création de l'arborescence structurée :
-  - `/sdcard/HEPHAISTOS/TOOLS/bin/`
-  - `/sdcard/HEPHAISTOS/TOOLS/scripts/`
-  - `/sdcard/HEPHAISTOS/TOOLS/profiles/`
-  - `/sdcard/HEPHAISTOS/TOOLS/rules/`
-- Extraction automatique des assets de l'APK vers `sdcard/HEPHAISTOS/TOOLS/` lors du premier lancement ou mise à jour.
-- Mise en miroir exécutable dans `context.filesDir/tools/bin/` avec permissions d'exécution (`rwxr-xr-x` / `chmod 755`) pour contourner la restriction `noexec` du stockage externe Android.
-- Création de scripts d'audit et de profils de test intégrés.
+3. **Cartographie Complète de l'Arborescence & Fichiers** :
+   - Arborescence totale avec métadonnées : chemin relatif, taille en octets, type MIME/format, permissions UNIX (`fs_config`), contextes SELinux (`file_contexts`).
 
-### D. Interopérabilité et Base de Données GÉMÉAU (`GemeauSignerEngine.kt` & `GemeauScreen.kt`)
-- Définition du répertoire de données structurées `/sdcard/HEPHAISTOS/DATA/GEMEAU/` :
-  - `trust_chain_deep_audit.json` (toutes les clés, empreintes, chaînes de certificats).
-  - `permissions_graph.json` (relations sharedUserId, privilèges système, signature-level permissions).
-  - `selinux_mmac_audit.json` (politiques mac_permissions, seinfo, contextes).
-  - `art_compilation_map.json` (cartographie des fichiers vdex/odex/oat et dépendances dex).
-  - `fsverity_audit.json` (arbres Merkle et descripteurs fsvmeta).
-  - `audit_report.md` (rapport global complet et lisible).
-- Détection automatique :
-  - Si le binaire natif `gemeau-dissector` est présent dans `context.filesDir/tools/bin/` ou `/sdcard/HEPHAISTOS/TOOLS/bin/`, l'analyse l'exécute directement pour un traitement instantané et une base de données ultra-riche.
-  - Si absent (ou environnement restreint), le moteur Kotlin intégré prend le relais de manière transparente avec le même schéma de données.
+4. **Dissection ELF des HALs, Bibliothèques (.so) et Blobs Propriétaires** :
+   - Analyseur ELF natif pur Kotlin :
+     - Magic `\x7fELF`, classe 32-bit / 64-bit, endianness, type (Shared Library `ET_DYN`, Executable `ET_EXEC`), architecture (ARM, AArch64, x86, x86_64).
+     - Lecture de la section dynamique : `DT_SONAME` (nom interne de la bibliothèque) et dépendances `DT_NEEDED` (liste de toutes les libs requises).
+   - Catégorisation des HALs (HIDL, AIDL, Passthrough) et blobs matériels (Caméra, Audio, Display/DRM, Radio/Modem, Capteurs, Connectivité).
+
+5. **Structuration de la Base de Données dans `sdcard/HEPHAISTOS/ANALYST/<cible>/`** :
+   - `tree.json` : Arborescence complète et métadonnées fichiers.
+   - `signatures.json` : Base de données JSON riche de toutes les signatures.
+   - `signature_report.txt` : Rapport textuel formatté selon le gabarit exact spécifié.
+   - `hals_blobs.json` : Cartographie exhaustive des HALs, blobs et dépendances ELF.
+   - `summary_manifest.json` : Résumé d'inventaire directement consommable par les fonctionnalités futures.
 
 ---
 
-## 3. Fichiers à Créer et Modifier
+## 2. Architecture Technique et Composants
 
-1. **`tools/gemeau-dissector/Cargo.toml`** & **`tools/gemeau-dissector/src/*.rs`** : Code source complet de l'outil natif en Rust.
-2. **`.github/workflows/build-tools.yml`** : Workflow d'intégration et cross-compilation continue GitHub Actions.
-3. **`tools/scripts/*.sh`** : Scripts d'aide et d'orchestration pour le système.
-4. **`tools/profiles/*.json`** & **`tools/rules/*.xml`** : Profils de signatures d'OS et modèles SELinux.
-5. **`app/src/main/java/com/example/data/WorkspaceManager.kt`** : Définition des dossiers TOOLS, DATA/GEMEAU et logique d'extraction automatique.
-6. **`app/src/main/java/com/example/data/GemeauSignerEngine.kt`** : Intégration de l'appel du binaire natif et écriture de la base de données enrichie.
-7. **`app/src/main/java/com/example/ui/screens/GemeauScreen.kt`** : Affichage des rapports enrichis et du statut de l'outillage natif.
+### A. Gestionnaire de Répertoire (`WorkspaceManager.kt`)
+- Ajout de `getAnalystDir(context: Context): File` (`/sdcard/HEPHAISTOS/ANALYST`).
+- Ajout de `getAnalystTargetDir(context: Context, targetName: String): File`.
+- Inclusion de `"ANALYST"` dans la liste `SUB_DIRS` de HephaistOS.
+
+### B. Moteur d'Analyse (`AnalystEngine.kt`)
+- `AnalystEngine.analyzeTarget(context, targetDir, onProgress, onLog): AnalystReport`
+- **Composant Signatures** :
+  - Détection V1, V2, V3 et parsing ASN.1 des blocs de signature.
+  - Calcul des 8 fonctions de hachage cryptographique (CRC32, MD5, SHA-1, SHA-224, SHA-256, SHA-384, SHA-512).
+  - Formatage strict du texte selon le gabarit utilisateur.
+- **Composant ELF & HALs** :
+  - Parseur de header ELF (32-bit ELF32 et 64-bit ELF64).
+  - Résolution des tables de chaînes et extraction de `DT_SONAME` et `DT_NEEDED`.
+  - Classification automatique des modules HAL (HIDL `@`, AIDL `-service`, `hw/`, etc.).
+- **Générateur d'Arborescence & Exporteurs JSON** :
+  - Sérialisation modulaire dans `sdcard/HEPHAISTOS/ANALYST/<cible>/`.
+
+### C. Modèle de Données & Écrans
+- `com.example.model.Screen` : Ajout de l'entrée `ANALYST("Analyst")`.
+- `AnalystScreen.kt` :
+  - Composable respectant le design demandé : sélecteur déroulant des dossiers `UNPACKED/`, bouton « LANCER L'ANALYSE », barre de progression M3 et panneau de logs/résumé.
+- Intégration dans `HephaistNavRail.kt`, `HomeScreen.kt` et `MainActivity.kt`.
 
 ---
 
-## 4. Étapes de Validation
-1. Lancer `compile_applet` pour valider la compilation Android.
-2. Vérifier les tests unitaires via `gradle :app:testDebugUnitTest`.
-3. Valider la structure des dossiers et l'extraction dans `/sdcard/HEPHAISTOS/TOOLS/` et la génération des rapports dans `/sdcard/HEPHAISTOS/DATA/GEMEAU/`.
+## 3. Plan d'Exécution Étape par Étape
+
+1. **Étape 1 : Modèles & WorkspaceManager**
+   - Ajouter `Screen.ANALYST` dans `Models.kt`.
+   - Ajouter `getAnalystDir` et `getAnalystTargetDir` dans `WorkspaceManager.kt`.
+   - Créer `AnalystModels.kt` pour modéliser les résultats d'analyse (certificats, hashs, HALs, arborescence).
+
+2. **Étape 2 : Implémentation du moteur `AnalystEngine.kt`**
+   - Implémenter le parseur de signatures APK/APEX (V1/V2/V3), le calcul complet des checksums et le formateur conforme au gabarit.
+   - Implémenter le parseur ELF pur Kotlin pour `.so` et exécutables.
+   - Implémenter l'explorateur d'arborescence et l'écriture des fichiers (`tree.json`, `signatures.json`, `signature_report.txt`, `hals_blobs.json`, `summary_manifest.json`).
+
+3. **Étape 3 : Création de l'interface `AnalystScreen.kt` & Câblage Navigation**
+   - Créer l'interface Material 3 minimale et fonctionnelle demandée.
+   - Câbler l'écran dans `MainActivity.kt`, `HomeScreen.kt` et `HephaistNavRail.kt`.
+
+4. **Étape 4 : Tests & Validation**
+   - Créer un test unitaire `AnalystEngineTest.kt` validant l'extraction des certificats, le calcul des 8 hashs et le formatage exact du gabarit.
+   - Compiler l'applet via `compile_applet` et exécuter `testDebugUnitTest`.
+
+---
+
+## 4. Vérification et Critères d'Acceptation
+
+- [ ] L'écran ANALYST propose la liste déroulante des dossiers `UNPACKED/` et le bouton de lancement.
+- [ ] Le rapport textuel `signature_report.txt` correspond rigoureusement à l'exemple fourni par l'utilisateur.
+- [ ] Tous les APKs et APEX sont scannés sans exception.
+- [ ] Les fichiers `.so` et HALs sont inspectés (SONAME, NEEDED, blobs).
+- [ ] Tous les exports JSON modulaires sont créés dans `sdcard/HEPHAISTOS/ANALYST/<cible>/`.
+- [ ] Le build compile (`compile_applet`) et les tests unitaires réussissent.

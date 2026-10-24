@@ -48,6 +48,9 @@ import com.example.model.GemeauVerifySubTab
 import com.example.model.RomVerificationAudit
 import com.example.model.AheExtension
 import com.example.model.AheUiState
+import com.example.model.AnalystReportSummary
+import com.example.model.AnalystUiState
+import com.example.data.AnalystEngine
 import java.io.File
 import java.io.InputStream
 import java.text.SimpleDateFormat
@@ -85,6 +88,7 @@ data class HephaistUiState(
     val extractorUiState: ExtractorUiState = ExtractorUiState(),
     val gemeauUiState: GemeauUiState = GemeauUiState(),
     val aheUiState: AheUiState = AheUiState(),
+    val analystUiState: AnalystUiState = AnalystUiState(),
     val snackbarMessage: String? = null
 )
 
@@ -1751,6 +1755,124 @@ class HephaistViewModel(application: Application) : AndroidViewModel(application
 
     fun clearAheLogs() {
         _uiState.update { it.copy(aheUiState = it.aheUiState.copy(logs = emptyList())) }
+    }
+
+    // ====================================================
+    // ANALYST ENGINE OPERATIONS
+    // ====================================================
+    fun refreshAnalystTargets(context: Context) {
+        val targets = WorkspaceManager.listUnpackedProjects(context)
+        _uiState.update { state ->
+            val selected = if (targets.contains(state.analystUiState.selectedTarget)) {
+                state.analystUiState.selectedTarget
+            } else {
+                targets.firstOrNull().orEmpty()
+            }
+            state.copy(
+                analystUiState = state.analystUiState.copy(
+                    availableTargets = targets,
+                    selectedTarget = selected
+                )
+            )
+        }
+    }
+
+    fun selectAnalystTarget(targetName: String) {
+        _uiState.update { state ->
+            state.copy(
+                analystUiState = state.analystUiState.copy(
+                    selectedTarget = targetName
+                )
+            )
+        }
+    }
+
+    fun runAnalystScan(context: Context) {
+        val selected = _uiState.value.analystUiState.selectedTarget
+        if (selected.isBlank()) {
+            _uiState.update { it.copy(snackbarMessage = "Veuillez sélectionner une cible dans UNPACKED") }
+            return
+        }
+
+        val unpackedDir = WorkspaceManager.getUnpackedDir(context)
+        val targetFile = File(unpackedDir, selected)
+        if (!targetFile.exists()) {
+            targetFile.mkdirs()
+        }
+
+        _uiState.update { state ->
+            state.copy(
+                analystUiState = state.analystUiState.copy(
+                    isAnalyzing = true,
+                    progress = 0f,
+                    currentStepText = "Démarrage de l'analyse factuelle...",
+                    logs = listOf(TerminalEntry("[ANALYST] Démarrage de l'analyse approfondie de $selected", isCommand = true))
+                )
+            )
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val summary = AnalystEngine.analyzeTarget(
+                    context = context,
+                    targetDir = targetFile,
+                    onProgress = { p, step ->
+                        _uiState.update { s ->
+                            s.copy(
+                                analystUiState = s.analystUiState.copy(
+                                    progress = p,
+                                    currentStepText = step
+                                )
+                            )
+                        }
+                    },
+                    onLog = { msg, isSuccess ->
+                        val entry = TerminalEntry(text = msg, isSuccess = isSuccess)
+                        _uiState.update { s ->
+                            val updatedLogs = (s.analystUiState.logs + entry).takeLast(250)
+                            s.copy(
+                                analystUiState = s.analystUiState.copy(logs = updatedLogs)
+                            )
+                        }
+                    }
+                )
+
+                val reportFile = File(summary.exportDir, "signature_report.txt")
+                val preview = if (reportFile.exists()) {
+                    reportFile.readText().take(2000)
+                } else ""
+
+                withContext(Dispatchers.Main) {
+                    _uiState.update { s ->
+                        s.copy(
+                            analystUiState = s.analystUiState.copy(
+                                isAnalyzing = false,
+                                progress = 1f,
+                                currentStepText = "Analyse terminée avec succès !",
+                                lastSummary = summary,
+                                previewReportText = preview
+                            ),
+                            snackbarMessage = "Analyse ANALYST terminée (${summary.totalFiles} fichiers, ${summary.totalApks} APKs)"
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    val errEntry = TerminalEntry("[ERREUR] Échec de l'analyse : ${e.message}", isError = true)
+                    _uiState.update { s ->
+                        s.copy(
+                            analystUiState = s.analystUiState.copy(
+                                isAnalyzing = false,
+                                progress = 0f,
+                                currentStepText = "Erreur : ${e.message}",
+                                logs = (s.analystUiState.logs + errEntry).takeLast(250)
+                            ),
+                            snackbarMessage = "Erreur ANALYST : ${e.message}"
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
