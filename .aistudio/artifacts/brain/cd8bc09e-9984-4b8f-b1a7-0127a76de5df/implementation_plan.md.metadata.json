@@ -1,6 +1,6 @@
 {
-  "summary":  "Plan révisé : détection positive standardisée des satellites AI Studio via le contrat Manifest (meta-data hephaistos.satellite et intent-filter org.hephaistos.action.SATELLITE) sans liste noire, consignation dans la Bible des templates, simplification des cartes GÉMÉAU (icône et nom uniquement) et affichage direct des satellites sur l'accueil.",
-  "updatedAt":  "2026-10-23T18:28:13.701596936Z",
+  "summary":  "Plan d'implémentation pour l'infrastructure d'outils natifs Rust haute performance via GitHub Actions pour HéphaïstOS GÉMÉAU :\n- Création du projet natif Rust `tools/gemeau-dissector` dédié à l'analyse approfondie de cibles ROM (chaînes de confiance, SELinux MMAC, permissions, structures ART .vdex/.odex, fs-verity).\n- Configuration du workflow GitHub Actions `.github/workflows/build-tools.yml` cross-compilant les binaires Rust pour Android (aarch64, armv7, x86_64) et les intégrant automatiquement dans les assets de l'APK.\n- Structuration complète et extraction automatique de `/sdcard/HEPHAISTOS/TOOLS/` (dossiers bin, scripts, profiles, rules) et mise en cache exécutable dans l'application.\n- Génération d'une base de données d'audit complète et riche (pouvant atteindre plusieurs mégaoctets) dans `/sdcard/HEPHAISTOS/DATA/GEMEAU/`.\n- Passerelle d'interopérabilité fluide entre l'interface GÉMÉAU, le moteur natif Rust et le moteur Kotlin intégré.",
+  "updatedAt":  "2026-10-24T08:56:03.242818095Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

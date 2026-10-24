@@ -1,0 +1,19 @@
+[package]
+name = "gemeau-dissector"
+version = "1.0.0"
+edition = "2021"
+authors = ["HephaistOS Core Team"]
+description = "Ultra-high-performance native Android ROM & APK cryptographic trust chain dissector"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+byteorder = "1.5"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

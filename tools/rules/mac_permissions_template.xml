@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SELinux MMAC (Middleware Mandatory Access Control) Policy Template
+  Emplacement: /sdcard/HEPHAISTOS/TOOLS/rules/mac_permissions_template.xml
+-->
+<policy>
+    <!-- Platform Signature: Maps SystemUI, Settings, framework to system_app context -->
+    <signer signature="@PLATFORM_CERT_HEX@">
+        <seinfo value="platform" />
+    </signer>
+
+    <!-- Media Signature: Maps MediaProvider to media_app context -->
+    <signer signature="@MEDIA_CERT_HEX@">
+        <seinfo value="media" />
+    </signer>
+
+    <!-- Shared Signature: Maps Contacts to shared_app context -->
+    <signer signature="@SHARED_CERT_HEX@">
+        <seinfo value="shared" />
+    </signer>
+
+    <!-- NetworkStack Signature -->
+    <signer signature="@NETWORKSTACK_CERT_HEX@">
+        <seinfo value="network_stack" />
+    </signer>
+
+    <!-- Default releasekey signature: untrusted_app -->
+    <default>
+        <seinfo value="default" />
+    </default>
+</policy>

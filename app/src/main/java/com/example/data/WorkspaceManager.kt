@@ -23,7 +23,8 @@ object WorkspaceManager {
         "Templates",
         "EXTRACT",
         "SIGNER",
-        "Extensions"
+        "Extensions",
+        "TOOLS"
     )
 
     fun getWorkspaceRoot(context: Context): File {
@@ -124,6 +125,162 @@ object WorkspaceManager {
         val dir = File(getSignerDir(context), "signed_roms")
         if (!dir.exists()) dir.mkdirs()
         return dir
+    }
+
+    fun getToolsDir(context: Context): File {
+        return getSubDir(context, "TOOLS")
+    }
+
+    fun getToolsBinDir(context: Context): File {
+        val dir = File(getToolsDir(context), "bin")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    fun getToolsScriptsDir(context: Context): File {
+        val dir = File(getToolsDir(context), "scripts")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    fun getToolsProfilesDir(context: Context): File {
+        val dir = File(getToolsDir(context), "profiles")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    fun getToolsRulesDir(context: Context): File {
+        val dir = File(getToolsDir(context), "rules")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    fun getGemeauDataDir(context: Context): File {
+        val dataDir = getSubDir(context, "DATA")
+        val gemeauDir = File(dataDir, "GEMEAU")
+        if (!gemeauDir.exists()) gemeauDir.mkdirs()
+        return gemeauDir
+    }
+
+    fun getInternalToolsBinDir(context: Context): File {
+        val internalDir = File(context.filesDir, "tools/bin")
+        if (!internalDir.exists()) internalDir.mkdirs()
+        return internalDir
+    }
+
+    fun ensureToolsDeployed(context: Context): File {
+        val toolsDir = getToolsDir(context)
+        val binDir = getToolsBinDir(context)
+        val scriptsDir = getToolsScriptsDir(context)
+        val profilesDir = getToolsProfilesDir(context)
+        val rulesDir = getToolsRulesDir(context)
+        val internalBinDir = getInternalToolsBinDir(context)
+        getGemeauDataDir(context)
+
+        // 1. Déploiement des scripts d'audit et de vérification par défaut
+        val auditScript = File(scriptsDir, "gemeau_deep_audit.sh")
+        if (!auditScript.exists()) {
+            auditScript.writeText(
+                """
+                #!/system/bin/sh
+                ROM_TARGET="${'$'}1"
+                OUTPUT_DIR="${'$'}{2:-/sdcard/HEPHAISTOS/DATA/GEMEAU}"
+                echo "[HEPHAISTOS GÉMÉAU] Lancement de l'audit approfondi: ${'$'}ROM_TARGET"
+                mkdir -p "${'$'}OUTPUT_DIR"
+                if [ -x "${internalBinDir.absolutePath}/gemeau-dissector" ]; then
+                    "${internalBinDir.absolutePath}/gemeau-dissector" --rom-path "${'$'}ROM_TARGET" --output-dir "${'$'}OUTPUT_DIR"
+                fi
+                exit 0
+                """.trimIndent()
+            )
+            try { auditScript.setExecutable(true) } catch (_: Exception) {}
+        }
+
+        val verifyScript = File(scriptsDir, "verify_chain.sh")
+        if (!verifyScript.exists()) {
+            verifyScript.writeText(
+                """
+                #!/system/bin/sh
+                APK="${'$'}1"
+                echo "[HEPHAISTOS GÉMÉAU] Vérification APK: ${'$'}APK"
+                unzip -l "${'$'}APK" | head -n 20
+                exit 0
+                """.trimIndent()
+            )
+            try { verifyScript.setExecutable(true) } catch (_: Exception) {}
+        }
+
+        // 2. Déploiement du profil AOSP Standard
+        val aospProfile = File(profilesDir, "aosp_standard.json")
+        if (!aospProfile.exists()) {
+            aospProfile.writeText(
+                """
+                {
+                  "profile_name": "AOSP Standard Trust Chain",
+                  "version": "1.0.0",
+                  "keys": [
+                    { "role": "platform", "target_shared_uids": ["android.uid.system"], "sample_packages": ["android", "com.android.systemui", "com.android.settings"] },
+                    { "role": "media", "target_shared_uids": ["android.uid.media"], "sample_packages": ["com.android.providers.media"] },
+                    { "role": "shared", "target_shared_uids": ["android.uid.shared"], "sample_packages": ["com.android.contacts"] },
+                    { "role": "networkstack", "target_shared_uids": ["android.uid.networkstack"], "sample_packages": ["com.android.networkstack"] },
+                    { "role": "releasekey", "target_shared_uids": [], "sample_packages": ["com.android.calculator2"] }
+                  ]
+                }
+                """.trimIndent()
+            )
+        }
+
+        // 3. Déploiement du template de règles SELinux MMAC
+        val macRules = File(rulesDir, "mac_permissions_template.xml")
+        if (!macRules.exists()) {
+            macRules.writeText(
+                """
+                <?xml version="1.0" encoding="utf-8"?>
+                <policy>
+                    <signer signature="@PLATFORM_CERT_HEX@">
+                        <seinfo value="platform" />
+                    </signer>
+                    <signer signature="@MEDIA_CERT_HEX@">
+                        <seinfo value="media" />
+                    </signer>
+                    <signer signature="@SHARED_CERT_HEX@">
+                        <seinfo value="shared" />
+                    </signer>
+                    <default>
+                        <seinfo value="default" />
+                    </default>
+                </policy>
+                """.trimIndent()
+            )
+        }
+
+        // 4. Extraction d'éventuels binaires natifs pré-compilés inclus dans assets/tools
+        try {
+            val assetManager = context.assets
+            val assetList = assetManager.list("tools/bin") ?: emptyArray()
+            for (assetName in assetList) {
+                val internalFile = File(internalBinDir, assetName)
+                val sdcardFile = File(binDir, assetName)
+                assetManager.open("tools/bin/$assetName").use { input ->
+                    FileOutputStream(internalFile).use { output ->
+                        input.copyTo(output)
+                    }
+                }
+                try {
+                    internalFile.setExecutable(true, false)
+                    internalFile.setReadable(true, false)
+                } catch (_: Exception) {}
+                
+                // Mirror to sdcard tools
+                if (!sdcardFile.exists()) {
+                    try {
+                        internalFile.copyTo(sdcardFile, overwrite = true)
+                    } catch (_: Exception) {}
+                }
+            }
+        } catch (_: Exception) {}
+
+        return toolsDir
     }
 
     fun getExtensionsDir(context: Context): File {
@@ -392,6 +549,9 @@ exit 0
                 )
             } catch (_: Exception) {}
         }
+
+        // Initialize and deploy structured tools and GÉMÉAU data directory
+        ensureToolsDeployed(context)
 
         return stats
     }

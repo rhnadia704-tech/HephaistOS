@@ -1,0 +1,42 @@
+{
+  "profile_name": "AOSP Standard Trust Chain",
+  "version": "1.0.0",
+  "description": "Standard Android Open Source Project cryptographic mapping for platform, media, shared, networkstack, and releasekey",
+  "keys": [
+    {
+      "role": "platform",
+      "target_shared_uids": ["android.uid.system"],
+      "sample_packages": ["android", "com.android.systemui", "com.android.settings", "com.android.keychain"],
+      "description": "Clé racine système AOSP signant framework-res et les composants système fondamentaux"
+    },
+    {
+      "role": "media",
+      "target_shared_uids": ["android.uid.media"],
+      "sample_packages": ["com.android.providers.media", "com.android.providers.media.module"],
+      "description": "Clé média AOSP pour le fournisseur de contenu multimédia et stockage"
+    },
+    {
+      "role": "shared",
+      "target_shared_uids": ["android.uid.shared"],
+      "sample_packages": ["com.android.contacts", "com.android.providers.contacts"],
+      "description": "Clé partagée pour les contacts et applications multi-processus partagées"
+    },
+    {
+      "role": "networkstack",
+      "target_shared_uids": ["android.uid.networkstack"],
+      "sample_packages": ["com.android.networkstack", "com.android.networkstack.tethering"],
+      "description": "Clé de pile réseau réseau Mainline / APEX"
+    },
+    {
+      "role": "releasekey",
+      "target_shared_uids": [],
+      "sample_packages": ["com.android.calculator2", "com.android.deskclock", "com.android.gallery3d"],
+      "description": "Clé de release générale par défaut pour tous les autres APKs tiers ou OEM"
+    }
+  ],
+  "protected_namespaces": [
+    "com.google.android.gms",
+    "com.google.android.gsf",
+    "com.android.vending"
+  ]
+}
