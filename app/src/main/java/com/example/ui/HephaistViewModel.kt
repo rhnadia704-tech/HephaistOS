@@ -1093,6 +1093,7 @@ class HephaistViewModel(application: Application) : AndroidViewModel(application
                 com.example.model.GemeauSubScreen.KEYMAKER,
                 com.example.model.GemeauSubScreen.SIGNAPK,
                 com.example.model.GemeauSubScreen.ROMSIGN,
+                com.example.model.GemeauSubScreen.RSIGNER,
                 com.example.model.GemeauSubScreen.VERIFICATION_HUB -> com.example.model.GemeauSubScreen.HUB
                 com.example.model.GemeauSubScreen.VERIFY_APP,
                 com.example.model.GemeauSubScreen.VERIFY_ROM -> com.example.model.GemeauSubScreen.VERIFICATION_HUB
@@ -1628,6 +1629,219 @@ class HephaistViewModel(application: Application) : AndroidViewModel(application
                     )
                 }
                 showSnackbar("Audit complet de ${rom.name} terminé ! Base de données générée dans Data/SIGNER/VERIFY/")
+            }
+        }
+    }
+
+    fun setSelectedRSignerTarget(file: File?) {
+        _uiState.update {
+            it.copy(gemeauUiState = it.gemeauUiState.copy(rsignerSelectedTarget = file, rsignerDetectedGroups = emptyList()))
+        }
+    }
+
+    fun analyzeTargetForRSigner(context: Context) {
+        val target = _uiState.value.gemeauUiState.rsignerSelectedTarget
+        if (target == null) {
+            showSnackbar("Veuillez sélectionner un fichier cible (.img, .zip, payload.bin, ou ROM/GSI).")
+            return
+        }
+
+        _uiState.update {
+            it.copy(
+                gemeauUiState = it.gemeauUiState.copy(
+                    rsignerIsAnalyzing = true,
+                    progress = 0.05f,
+                    currentStepText = "Analyse approfondie de ${target.name}...",
+                    logs = (it.gemeauUiState.logs +
+                            TerminalEntry("=======================================================") +
+                            TerminalEntry("[R-SIGNER] Démarrage de l'analyse approfondie de ${target.name}...")).takeLast(250)
+                )
+            )
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val groups = GemeauSignerEngine.analyzeTargetForRSigner(
+                    targetFile = target,
+                    context = context,
+                    onProgress = { step, p ->
+                        _uiState.update {
+                            it.copy(
+                                gemeauUiState = it.gemeauUiState.copy(
+                                    currentStepText = step,
+                                    progress = p
+                                )
+                            )
+                        }
+                    },
+                    onLog = { line ->
+                        val isSuccess = line.contains("[SUCCÈS") || line.contains("[GROUPE") || line.contains("[ANALYSE")
+                        val isError = line.contains("[ERREUR]") || line.contains("[AVERTISSEMENT]")
+                        _uiState.update {
+                            it.copy(
+                                gemeauUiState = it.gemeauUiState.copy(
+                                    logs = (it.gemeauUiState.logs + TerminalEntry(line, isSuccess = isSuccess, isError = isError)).takeLast(250)
+                                )
+                            )
+                        }
+                    }
+                )
+
+                withContext(Dispatchers.Main) {
+                    _uiState.update {
+                        it.copy(
+                            gemeauUiState = it.gemeauUiState.copy(
+                                rsignerIsAnalyzing = false,
+                                progress = 1.0f,
+                                rsignerDetectedGroups = groups,
+                                currentStepText = "Analyse achevée : ${groups.size} groupe(s) identifié(s)"
+                            )
+                        )
+                    }
+                    showSnackbar("${groups.size} groupe(s) de signatures détecté(s) dans ${target.name}")
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    _uiState.update {
+                        it.copy(
+                            gemeauUiState = it.gemeauUiState.copy(
+                                rsignerIsAnalyzing = false,
+                                progress = 0.0f,
+                                currentStepText = "Erreur analyse : ${e.message}",
+                                logs = (it.gemeauUiState.logs + TerminalEntry("[ERREUR] ${e.message}", isError = true)).takeLast(250)
+                            )
+                        )
+                    }
+                    showSnackbar("Erreur analyse R-SIGNER : ${e.message}")
+                }
+            }
+        }
+    }
+
+    fun generateNewKeysetForRSigner(
+        context: Context,
+        name: String,
+        cn: String,
+        org: String,
+        country: String,
+        alg: String,
+        years: Int,
+        onComplete: (KeysetInfo) -> Unit
+    ) {
+        val detected = _uiState.value.gemeauUiState.rsignerDetectedGroups
+        viewModelScope.launch(Dispatchers.IO) {
+            val keyset = GemeauSignerEngine.generateKeysetForDetectedGroups(
+                context = context,
+                keysetName = name,
+                commonName = cn,
+                organization = org,
+                countryCode = country,
+                algorithm = alg,
+                validityYears = years,
+                detectedGroups = detected,
+                onLog = { msg ->
+                    _uiState.update {
+                        it.copy(
+                            gemeauUiState = it.gemeauUiState.copy(
+                                logs = (it.gemeauUiState.logs + TerminalEntry(msg)).takeLast(250)
+                            )
+                        )
+                    }
+                }
+            )
+            refreshKeysets(context)
+            withContext(Dispatchers.Main) {
+                onComplete(keyset)
+            }
+        }
+    }
+
+    fun executeRSigner(
+        context: Context,
+        keyset: KeysetInfo,
+        withVbmeta: Boolean,
+        preserveGapps: Boolean = true
+    ) {
+        val target = _uiState.value.gemeauUiState.rsignerSelectedTarget
+        if (target == null) {
+            showSnackbar("Veuillez sélectionner un fichier cible.")
+            return
+        }
+
+        _uiState.update {
+            it.copy(
+                gemeauUiState = it.gemeauUiState.copy(
+                    isExecuting = true,
+                    progress = 0.05f,
+                    currentStepText = "Initialisation de R-SIGNER pour ${target.name}...",
+                    logs = (it.gemeauUiState.logs +
+                            TerminalEntry("=======================================================") +
+                            TerminalEntry("[R-SIGNER] Lancement de la resignature avec le trousseau ${keyset.name}...")).takeLast(250)
+                )
+            )
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val report = GemeauSignerEngine.executeRSignerPipeline(
+                    context = context,
+                    targetFile = target,
+                    keysetDir = File(keyset.dirPath),
+                    withVbmeta = withVbmeta,
+                    preserveGapps = preserveGapps,
+                    onProgress = { step, p, proc, tot ->
+                        _uiState.update {
+                            it.copy(
+                                gemeauUiState = it.gemeauUiState.copy(
+                                    currentStepText = step,
+                                    progress = p,
+                                    processedCount = proc,
+                                    totalItemsCount = tot
+                                )
+                            )
+                        }
+                    },
+                    onLog = { line ->
+                        val isSuccess = line.contains("[SUCCÈS") || line.contains("[PHASE") || line.contains("[R-SIGNÉ")
+                        val isError = line.contains("[ERREUR")
+                        _uiState.update {
+                            it.copy(
+                                gemeauUiState = it.gemeauUiState.copy(
+                                    logs = (it.gemeauUiState.logs + TerminalEntry(line, isSuccess = isSuccess, isError = isError)).takeLast(250)
+                                )
+                            )
+                        }
+                    }
+                )
+
+                withContext(Dispatchers.Main) {
+                    _uiState.update {
+                        it.copy(
+                            gemeauUiState = it.gemeauUiState.copy(
+                                isExecuting = false,
+                                progress = 1.0f,
+                                rsignerLastOutputPath = report.signedRomPath,
+                                lastGeneratedReportPath = report.reportPath,
+                                currentStepText = "R-SIGNER terminé avec succès ! (${report.resignedApksCount} APKs resignés)"
+                            )
+                        )
+                    }
+                    showSnackbar("Resignature R-SIGNER terminée ! Fichier dans sdcard/HEPHAISTOS/SIGNER/RSIGNER")
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    _uiState.update {
+                        it.copy(
+                            gemeauUiState = it.gemeauUiState.copy(
+                                isExecuting = false,
+                                progress = 0.0f,
+                                currentStepText = "Erreur R-SIGNER : ${e.message}",
+                                logs = (it.gemeauUiState.logs + TerminalEntry("[ERREUR FATALE] ${e.message}", isError = true)).takeLast(250)
+                            )
+                        )
+                    }
+                    showSnackbar("Erreur R-SIGNER : ${e.message}")
+                }
             }
         }
     }

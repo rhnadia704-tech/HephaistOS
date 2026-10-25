@@ -1,6 +1,6 @@
 {
-  "summary":  "Plan d'implémentation pour la détection exhaustive des schémas de signature V1, V2, V3 (format apktoolM) et la structuration des signatures par groupe (signatures_by_group.json).",
-  "updatedAt":  "2026-10-25T09:41:18.495231441Z",
+  "summary":  "Plan d'implémentation pour le nouveau module R-SIGNER dans GÉMÉAU, intégrant la signature V1+V2+V3, la sélection de cibles via gestionnaire flottant, le popup de création de keyset 1:1, la préservation GApps/SafetyNet, la mise à jour des permissions/ART/fsvmeta et l'export final dans sdcard/HEPHAISTOS/SIGNER/RSIGNER.",
+  "updatedAt":  "2026-10-25T15:54:59.692879685Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

@@ -191,7 +191,8 @@ enum class GemeauSubScreen {
     ROMSIGN,
     VERIFICATION_HUB,
     VERIFY_APP,
-    VERIFY_ROM
+    VERIFY_ROM,
+    RSIGNER
 }
 
 enum class GemeauVerifySubTab(val label: String) {
@@ -272,6 +273,12 @@ data class GemeauUiState(
     val isAuditingRom: Boolean = false,
     val romAuditResult: RomVerificationAudit? = null,
     val lastVerificationDir: String? = null,
+    // Page 5: R-SIGNER inputs and results
+    val rsignerSelectedTarget: java.io.File? = null,
+    val rsignerDetectedGroups: List<SignatureGroup> = emptyList(),
+    val rsignerIsAnalyzing: Boolean = false,
+    val rsignerAnalysisAudit: RomVerificationAudit? = null,
+    val rsignerLastOutputPath: String? = null,
     // Execution Progress & Terminal
     val progress: Float = 0f,
     val currentStepText: String = "Prêt pour la signature",

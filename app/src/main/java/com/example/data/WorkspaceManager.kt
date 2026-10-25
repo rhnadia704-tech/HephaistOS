@@ -128,6 +128,12 @@ object WorkspaceManager {
         return dir
     }
 
+    fun getSignerRSignerDir(context: Context): File {
+        val dir = File(getSignerDir(context), "RSIGNER")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
     fun getToolsDir(context: Context): File {
         return getSubDir(context, "TOOLS")
     }

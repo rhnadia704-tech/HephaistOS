@@ -188,4 +188,137 @@ class GemeauSignerEngineTest {
         assertTrue("Comments must remain intact", patchedXml.contains("<!-- Custom OEM SELinux MMAC Policy definition -->"))
         assertTrue("Default tag must remain intact", patchedXml.contains("<seinfo value=\"default\" />"))
     }
+
+    @Test
+    fun testRSignerEndToEndPipeline() {
+        runBlocking {
+            val context = ApplicationProvider.getApplicationContext<Context>()
+            val testTargetDir = File(context.cacheDir, "test_rom_target_${System.currentTimeMillis()}").apply { mkdirs() }
+
+            // 1. Create a dummy base keyset to create initially signed APKs
+            val baseKeyset = GemeauSignerEngine.generateKeyset(
+                context = context,
+                keysetName = "OriginalRomKeys",
+                commonName = "OriginalAosp",
+                organization = "OriginalOem",
+                countryCode = "US",
+                algorithm = "RSA 2048",
+                validityYears = 25,
+                onProgress = { _, _ -> },
+                onLog = {}
+            )
+
+            // 2. Create sample APKs representing a target ROM:
+            // a) Settings.apk (Platform)
+            val settingsApk = File(testTargetDir, "system/priv-app/Settings.apk").apply { parentFile?.mkdirs() }
+            ZipOutputStream(FileOutputStream(settingsApk)).use { zos ->
+                zos.putNextEntry(ZipEntry("classes.dex"))
+                zos.write("SETTINGS_DEX_BYTES".toByteArray())
+                zos.closeEntry()
+            }
+            val signedSettings = GemeauSignerEngine.signMultipleApks(context, listOf(settingsApk), File(baseKeyset.dirPath), "platform", { _, _, _ -> }, {}).first()
+            signedSettings.copyTo(settingsApk, overwrite = true)
+
+            // b) MediaProvider.apk (Media)
+            val mediaApk = File(testTargetDir, "system/priv-app/MediaProvider.apk").apply { parentFile?.mkdirs() }
+            ZipOutputStream(FileOutputStream(mediaApk)).use { zos ->
+                zos.putNextEntry(ZipEntry("classes.dex"))
+                zos.write("MEDIA_DEX_BYTES".toByteArray())
+                zos.closeEntry()
+            }
+            val signedMedia = GemeauSignerEngine.signMultipleApks(context, listOf(mediaApk), File(baseKeyset.dirPath), "media", { _, _, _ -> }, {}).first()
+            signedMedia.copyTo(mediaApk, overwrite = true)
+
+            // c) GoogleServicesFramework.apk (Protected GApps)
+            val gmsApk = File(testTargetDir, "system/priv-app/com.google.android.gsf.apk").apply { parentFile?.mkdirs() }
+            ZipOutputStream(FileOutputStream(gmsApk)).use { zos ->
+                zos.putNextEntry(ZipEntry("classes.dex"))
+                zos.write("GSF_DEX_BYTES".toByteArray())
+                zos.closeEntry()
+            }
+            val signedGms = GemeauSignerEngine.signMultipleApks(context, listOf(gmsApk), File(baseKeyset.dirPath), "releasekey", { _, _, _ -> }, {}).first()
+            signedGms.copyTo(gmsApk, overwrite = true)
+            val originalGsfCertFp = GemeauSignerEngine.verifyApkSignature(gmsApk).sha256Fingerprint
+
+            // d) mac_permissions.xml
+            val macXml = File(testTargetDir, "system/etc/selinux/mac_permissions.xml").apply { parentFile?.mkdirs() }
+            macXml.writeText("""
+                <policy>
+                    <signer signature="${baseKeyset.certFingerprints["platform"]}">
+                        <seinfo value="platform" />
+                    </signer>
+                    <default>
+                        <seinfo value="default" />
+                    </default>
+                </policy>
+            """.trimIndent())
+
+            // 3. Test Phase 1: analyzeTargetForRSigner
+            val detectedGroups = GemeauSignerEngine.analyzeTargetForRSigner(
+                targetFile = testTargetDir,
+                context = context,
+                onProgress = { _, _ -> },
+                onLog = { println(it) }
+            )
+
+            assertTrue("Should detect at least 2 groups", detectedGroups.size >= 2)
+            println("Detected Groups in R-Signer:")
+            detectedGroups.forEach {
+                println(" - ${it.groupName} (${it.apkCount} APKs, schemes: ${it.schemesDisplay})")
+            }
+
+            // 4. Test Phase 2: generateKeysetForDetectedGroups (1:1 mapping)
+            val newKeyset1to1 = GemeauSignerEngine.generateKeysetForDetectedGroups(
+                context = context,
+                keysetName = "NewHephaistKeyset",
+                commonName = "NewHephaistOS",
+                organization = "Community",
+                countryCode = "FR",
+                algorithm = "RSA 2048",
+                validityYears = 25,
+                detectedGroups = detectedGroups,
+                onLog = { println(it) }
+            )
+            assertNotNull(newKeyset1to1)
+            assertTrue(File(newKeyset1to1.dirPath, "platform.pk8").exists())
+            assertTrue(File(newKeyset1to1.dirPath, "media.pk8").exists())
+            assertTrue(File(newKeyset1to1.dirPath, "avb.pk8").exists())
+
+            // 5. Test Phase 3-6: executeRSignerPipeline
+            val report = GemeauSignerEngine.executeRSignerPipeline(
+                context = context,
+                targetFile = testTargetDir,
+                keysetDir = File(newKeyset1to1.dirPath),
+                withVbmeta = true,
+                preserveGapps = true,
+                onProgress = { step, p, proc, tot -> println("[$p] $step ($proc/$tot)") },
+                onLog = { println(it) }
+            )
+
+            assertNotNull(report)
+            assertEquals(1, report.preservedGappsCount) // GSF was preserved!
+            assertTrue(report.hasVbmetaGenerated)
+            assertTrue(File(report.signedRomPath).exists())
+
+            // 6. Verify GApps signature was strictly preserved for SafetyNet
+            val postGsfCertFp = GemeauSignerEngine.verifyApkSignature(gmsApk).sha256Fingerprint
+            assertEquals("GApps signature must be preserved 100% identically for SafetyNet", originalGsfCertFp, postGsfCertFp)
+
+            // 7. Verify Settings.apk was signed with V1 + V2 + V3
+            val settingsVerif = GemeauSignerEngine.verifyApkSignature(settingsApk)
+            println("Settings.apk after R-Signer:")
+            println("  v1: ${settingsVerif.hasV1Scheme}")
+            println("  v2: ${settingsVerif.hasV2Scheme}")
+            println("  v3: ${settingsVerif.hasV3Scheme}")
+            println("  sha256: ${settingsVerif.sha256Fingerprint}")
+            assertTrue("Settings.apk must have V1 scheme", settingsVerif.hasV1Scheme)
+            assertTrue("Settings.apk must have V2 scheme", settingsVerif.hasV2Scheme)
+            assertTrue("Settings.apk must have V3 scheme", settingsVerif.hasV3Scheme)
+            assertEquals("Settings.apk fingerprint must match new platform key", newKeyset1to1.certFingerprints["platform"], settingsVerif.sha256Fingerprint)
+
+            // Clean up
+            testTargetDir.deleteRecursively()
+        }
+    }
 }
+

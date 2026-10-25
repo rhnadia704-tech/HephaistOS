@@ -421,6 +421,18 @@ class MainActivity : ComponentActivity() {
                                                 onAuditRom = {
                                                     viewModel.auditSelectedRom(context)
                                                 },
+                                                onSelectRSignerTarget = { file ->
+                                                    viewModel.setSelectedRSignerTarget(file)
+                                                },
+                                                onAnalyzeRSignerTarget = {
+                                                    viewModel.analyzeTargetForRSigner(context)
+                                                },
+                                                onExecuteRSigner = { keyset, withVbmeta, preserveGapps ->
+                                                    viewModel.executeRSigner(context, keyset, withVbmeta, preserveGapps)
+                                                },
+                                                onGenerateKeysetForRSigner = { name, cn, org, country, alg, years, onComplete ->
+                                                    viewModel.generateNewKeysetForRSigner(context, name, cn, org, country, alg, years, onComplete)
+                                                },
                                                 onNavigateSubScreen = { sub ->
                                                     viewModel.setGemeauSubScreen(sub)
                                                 },

@@ -101,7 +101,13 @@ import com.example.model.GemeauVerifySubTab
 import com.example.model.KeysetInfo
 import com.example.model.RomVerificationAudit
 import com.example.model.TerminalEntry
+import com.example.model.SignatureGroup
+import com.example.model.SignatureGroupApkEntry
 import com.example.ui.components.InternalFilePickerDialog
+import androidx.compose.foundation.border
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.material3.Checkbox
+import androidx.compose.ui.text.style.TextAlign
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -126,6 +132,10 @@ fun GemeauScreen(
     onVerifyApks: () -> Unit = {},
     onSelectRomForAudit: (File?) -> Unit = {},
     onAuditRom: () -> Unit = {},
+    onSelectRSignerTarget: (File?) -> Unit = {},
+    onAnalyzeRSignerTarget: () -> Unit = {},
+    onExecuteRSigner: (KeysetInfo, Boolean, Boolean) -> Unit = { _, _, _ -> },
+    onGenerateKeysetForRSigner: (name: String, cn: String, org: String, country: String, alg: String, years: Int, onComplete: (KeysetInfo) -> Unit) -> Unit = { _, _, _, _, _, _, _ -> },
     onNavigateSubScreen: (GemeauSubScreen) -> Unit = {},
     onNavigateBackInGemeau: () -> Unit = {},
     onBackToHome: () -> Unit,
@@ -152,6 +162,10 @@ fun GemeauScreen(
     var showChooseKeyDialogForRom by remember { mutableStateOf(false) }
     var pendingWithVbmeta by remember { mutableStateOf(false) }
 
+    var showRSignerTargetPicker by remember { mutableStateOf(false) }
+    var showRSignerKeysetDialog by remember { mutableStateOf(false) }
+    var pendingRSignerWithVbmeta by remember { mutableStateOf(false) }
+
     var showReportDialog by remember { mutableStateOf(false) }
     var reportDialogContent by remember { mutableStateOf("") }
     var reportDialogTitle by remember { mutableStateOf("") }
@@ -164,6 +178,7 @@ fun GemeauScreen(
         GemeauSubScreen.VERIFICATION_HUB -> "GÉMEAU > VÉRIFICATION"
         GemeauSubScreen.VERIFY_APP -> "Vérification des Applications (APKs)"
         GemeauSubScreen.VERIFY_ROM -> "Audit de ROM Complète"
+        GemeauSubScreen.RSIGNER -> "GÉMEAU > R-SIGNER"
     }
 
     val topSubtitle = when (gemeauState.currentSubScreen) {
@@ -174,6 +189,7 @@ fun GemeauScreen(
         GemeauSubScreen.VERIFICATION_HUB -> "Choisissez le mode d'audit cryptographique"
         GemeauSubScreen.VERIFY_APP -> "Audit des schémas v1, v2, v3, v4 et certificats"
         GemeauSubScreen.VERIFY_ROM -> "Audit de la chaîne de confiance et de mac_permissions.xml"
+        GemeauSubScreen.RSIGNER -> "Resignature Intelligente de ROMs, GSIs & Alignement 1:1"
     }
 
     Column(
@@ -226,6 +242,7 @@ fun GemeauScreen(
                             GemeauSubScreen.KEYMAKER -> Icons.Default.Key
                             GemeauSubScreen.SIGNAPK -> Icons.Default.Layers
                             GemeauSubScreen.ROMSIGN -> Icons.Default.Build
+                            GemeauSubScreen.RSIGNER -> Icons.Default.Security
                             else -> Icons.Default.VerifiedUser
                         },
                         contentDescription = "GEMEAU",
@@ -386,6 +403,34 @@ fun GemeauScreen(
                         )
                     }
                 }
+                GemeauSubScreen.RSIGNER -> {
+                    RSignerPage(
+                        state = gemeauState,
+                        onBrowseTarget = { showRSignerTargetPicker = true },
+                        onAnalyzeTarget = onAnalyzeRSignerTarget,
+                        onStartSign = { withVbmeta ->
+                            pendingRSignerWithVbmeta = withVbmeta
+                            if (gemeauState.availableKeysets.isEmpty()) {
+                                onRefreshKeysets()
+                            }
+                            showRSignerKeysetDialog = true
+                        },
+                        onViewReport = { path, title ->
+                            try {
+                                val f = File(path)
+                                if (f.exists()) {
+                                    reportDialogContent = f.readText()
+                                    reportDialogTitle = title
+                                    showReportDialog = true
+                                }
+                            } catch (e: Exception) {
+                                reportDialogContent = "Erreur lecture rapport: ${e.message}"
+                                reportDialogTitle = title
+                                showReportDialog = true
+                            }
+                        }
+                    )
+                }
             }
         }
     }
@@ -487,6 +532,39 @@ fun GemeauScreen(
                 onSignRom(chosenKeyset, pendingWithVbmeta)
             },
             onDismiss = { showChooseKeyDialogForRom = false }
+        )
+    }
+
+    // Modal File Picker for R-SIGNER Target (.img, .zip, payload.bin, ROM, GSI)
+    if (showRSignerTargetPicker) {
+        InternalFilePickerDialog(
+            initialDirectory = null,
+            onDismiss = { showRSignerTargetPicker = false },
+            onFileSelected = { file ->
+                showRSignerTargetPicker = false
+                onSelectRSignerTarget(file)
+            }
+        )
+    }
+
+    // Modal Dialog: Keyset Selector / 1:1 Creator for R-SIGNER
+    if (showRSignerKeysetDialog) {
+        RSignerKeysetDialog(
+            keysets = gemeauState.availableKeysets,
+            selectedKeyset = gemeauState.selectedKeyset,
+            detectedGroups = gemeauState.rsignerDetectedGroups,
+            withVbmeta = pendingRSignerWithVbmeta,
+            onConfirmExisting = { chosenKeyset, preserveGapps ->
+                showRSignerKeysetDialog = false
+                onExecuteRSigner(chosenKeyset, pendingRSignerWithVbmeta, preserveGapps)
+            },
+            onConfirmCreateNew = { name, cn, org, country, alg, years, preserveGapps ->
+                showRSignerKeysetDialog = false
+                onGenerateKeysetForRSigner(name, cn, org, country, alg, years) { newKeyset ->
+                    onExecuteRSigner(newKeyset, pendingRSignerWithVbmeta, preserveGapps)
+                }
+            },
+            onDismiss = { showRSignerKeysetDialog = false }
         )
     }
 
@@ -1493,6 +1571,16 @@ fun GemeauHubView(
                 onClick = { onOpenFeature(GemeauSubScreen.VERIFICATION_HUB) }
             )
         }
+
+        // Feature 5: R-SIGNER
+        item {
+            GemeauMinimalCard(
+                icon = Icons.Default.Security,
+                title = "5. R-SIGNER",
+                testTag = "open_feature_rsigner",
+                onClick = { onOpenFeature(GemeauSubScreen.RSIGNER) }
+            )
+        }
     }
 }
 
@@ -2367,3 +2455,606 @@ fun MetricCard(modifier: Modifier = Modifier, title: String, value: String) {
         }
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PAGE 5: R-SIGNER (ADVANCED SYSTEM & ROM RESIGNER WITH 1:1 REPLICATION)
+// ─────────────────────────────────────────────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun RSignerPage(
+    state: GemeauUiState,
+    onBrowseTarget: () -> Unit,
+    onAnalyzeTarget: () -> Unit,
+    onStartSign: (withVbmeta: Boolean) -> Unit,
+    onViewReport: (path: String, title: String) -> Unit
+) {
+    val selectedTarget = state.rsignerSelectedTarget
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        // Banner card
+        item {
+            ElevatedCard(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.elevatedCardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                )
+            ) {
+                Row(
+                    modifier = Modifier.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(46.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.primaryContainer),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Security,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(14.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "R-SIGNER — Resignature Intelligente",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "Resignature AOSP V1+V2+V3, préservation SafetyNet/GApps et reconstruction à l'identique dans sdcard/HEPHAISTOS/SIGNER/RSIGNER/.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+
+        // Target File Selection Card
+        item {
+            ElevatedCard(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.elevatedCardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                )
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "Fichier Cible (ROM, GSI, .img, .zip, payload.bin)",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp))
+                            .clickable { onBrowseTarget() }
+                            .padding(14.dp),
+                        color = MaterialTheme.colorScheme.surface
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                if (selectedTarget != null) {
+                                    Text(
+                                        text = selectedTarget.name,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "${com.example.data.UkaEngine.formatFileSize(selectedTarget.length())} • ${selectedTarget.absolutePath}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                } else {
+                                    Text(
+                                        text = "Touchez pour sélectionner la cible via le gestionnaire flottant...",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            OutlinedButton(
+                                onClick = onBrowseTarget,
+                                modifier = Modifier.testTag("rsigner_browse_target_btn"),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Icon(imageVector = Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Parcourir")
+                            }
+                        }
+                    }
+
+                    if (selectedTarget != null) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Button(
+                            onClick = onAnalyzeTarget,
+                            enabled = !state.rsignerIsAnalyzing && !state.isExecuting,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("rsigner_analyze_btn"),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            if (state.rsignerIsAnalyzing) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.onPrimary
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Analyse en cours...")
+                            } else {
+                                Icon(imageVector = Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("1. Analyser la cible (Détection 1:1 des groupes)")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Detected Signature Groups Card
+        if (state.rsignerDetectedGroups.isNotEmpty()) {
+            item {
+                ElevatedCard(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.elevatedCardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "Groupes de Signatures Détectés (${state.rsignerDetectedGroups.size})",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = MaterialTheme.colorScheme.primaryContainer
+                            ) {
+                                Text(
+                                    text = "1:1 Alignement",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        state.rsignerDetectedGroups.forEach { grp ->
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                shape = RoundedCornerShape(10.dp),
+                                color = MaterialTheme.colorScheme.surface,
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(
+                                                if (grp.groupName.contains("Google")) MaterialTheme.colorScheme.tertiaryContainer
+                                                else MaterialTheme.colorScheme.secondaryContainer
+                                            ),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = if (grp.groupName.contains("Google")) Icons.Default.VerifiedUser else Icons.Default.VpnKey,
+                                            contentDescription = null,
+                                            tint = if (grp.groupName.contains("Google")) MaterialTheme.colorScheme.onTertiaryContainer
+                                            else MaterialTheme.colorScheme.onSecondaryContainer,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = grp.groupName,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = "${grp.apkCount} APK(s) • Schéma: ${grp.schemesDisplay} • SHA: ${grp.sha256.take(16)}...",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Action Buttons: SIGNER & SIGNER + VBMETA
+        item {
+            ElevatedCard(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.elevatedCardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                )
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "Actions de Resignature R-SIGNER",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Sortie garantie dans sdcard/HEPHAISTOS/SIGNER/RSIGNER/. Format reflet de la cible.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Button(
+                            onClick = { onStartSign(false) },
+                            enabled = selectedTarget != null && !state.isExecuting && !state.rsignerIsAnalyzing,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("rsigner_sign_btn"),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(imageVector = Icons.Default.Key, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("SIGNER", fontWeight = FontWeight.Bold)
+                        }
+
+                        Button(
+                            onClick = { onStartSign(true) },
+                            enabled = selectedTarget != null && !state.isExecuting && !state.rsignerIsAnalyzing,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("rsigner_sign_vbmeta_btn"),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.tertiary
+                            )
+                        ) {
+                            Icon(imageVector = Icons.Default.Security, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("SIGNER + VBMETA", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+        }
+
+        // Output result card if available
+        if (state.rsignerLastOutputPath != null) {
+            item {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(imageVector = Icons.Default.CheckCircle, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Conteneur Resigné Disponible",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = state.rsignerLastOutputPath,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = {
+                                state.lastGeneratedReportPath?.let {
+                                    onViewReport(it, "Rapport R-SIGNER")
+                                }
+                            },
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Icon(imageVector = Icons.Default.Description, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Consulter le Rapport Complet")
+                        }
+                    }
+                }
+            }
+        }
+
+        // Console / Terminal logs
+        item {
+            GemeauConsoleCard(
+                isExecuting = state.isExecuting || state.rsignerIsAnalyzing,
+                progress = state.progress,
+                currentStep = state.currentStepText,
+                logs = state.logs,
+                reportPath = state.lastGeneratedReportPath,
+                outputPath = state.rsignerLastOutputPath,
+                onViewReport = { path -> onViewReport(path, "Rapport R-SIGNER") }
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun RSignerKeysetDialog(
+    keysets: List<KeysetInfo>,
+    selectedKeyset: KeysetInfo?,
+    detectedGroups: List<SignatureGroup>,
+    withVbmeta: Boolean,
+    onConfirmExisting: (KeysetInfo, preserveGapps: Boolean) -> Unit,
+    onConfirmCreateNew: (name: String, cn: String, org: String, country: String, alg: String, years: Int, preserveGapps: Boolean) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var createNewMode by remember { mutableStateOf(keysets.isEmpty()) }
+    var chosenKeyset by remember { mutableStateOf(selectedKeyset ?: keysets.firstOrNull()) }
+    var preserveGapps by remember { mutableStateOf(true) }
+
+    var newName by remember { mutableStateOf("Keyset_${System.currentTimeMillis() % 10000}") }
+    var cn by remember { mutableStateOf("HephaistOS") }
+    var org by remember { mutableStateOf("Kitchen Community") }
+    var country by remember { mutableStateOf("FR") }
+    var algorithm by remember { mutableStateOf("RSA 2048") }
+    var years by remember { mutableStateOf("25") }
+
+    var expandedDropdown by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(imageVector = Icons.Default.VpnKey, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Trousseau R-SIGNER (Alignement 1:1)", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // Tab-like Toggle between New and Existing
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                        .padding(4.dp)
+                ) {
+                    Surface(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { createNewMode = true },
+                        color = if (createNewMode) MaterialTheme.colorScheme.primary else Color.Transparent
+                    ) {
+                        Text(
+                            text = "Créer Keyset 1:1",
+                            modifier = Modifier.padding(vertical = 8.dp),
+                            textAlign = TextAlign.Center,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (createNewMode) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+
+                    Surface(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { if (keysets.isNotEmpty()) createNewMode = false },
+                        color = if (!createNewMode) MaterialTheme.colorScheme.primary else Color.Transparent
+                    ) {
+                        Text(
+                            text = "Keyset Existant (${keysets.size})",
+                            modifier = Modifier.padding(vertical = 8.dp),
+                            textAlign = TextAlign.Center,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (!createNewMode) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+
+                if (createNewMode) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "Les rôles seront générés à l'identique pour les ${detectedGroups.size.coerceAtLeast(1)} groupe(s) détectés (Platform, Media, Shared, Release, NetworkStack, AVB).",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(8.dp)
+                        )
+                    }
+
+                    OutlinedTextField(
+                        value = newName,
+                        onValueChange = { newName = it },
+                        label = { Text("Nom du Keyset") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = cn,
+                        onValueChange = { cn = it },
+                        label = { Text("Common Name (CN)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = org,
+                        onValueChange = { org = it },
+                        label = { Text("Organisation (O)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = country,
+                            onValueChange = { country = it.take(2).uppercase() },
+                            label = { Text("Pays") },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = years,
+                            onValueChange = { years = it.filter { c -> c.isDigit() } },
+                            label = { Text("Validité (ans)") },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true
+                        )
+                    }
+                } else {
+                    Text(
+                        text = "Choisissez parmi les trousseaux déjà créés dans Keymaker :",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    ExposedDropdownMenuBox(
+                        expanded = expandedDropdown,
+                        onExpandedChange = { expandedDropdown = !expandedDropdown }
+                    ) {
+                        OutlinedTextField(
+                            value = chosenKeyset?.name ?: "Aucun",
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("Trousseau") },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedDropdown) },
+                            modifier = Modifier
+                                .menuAnchor()
+                                .fillMaxWidth()
+                        )
+                        ExposedDropdownMenu(
+                            expanded = expandedDropdown,
+                            onDismissRequest = { expandedDropdown = false }
+                        ) {
+                            keysets.forEach { k ->
+                                DropdownMenuItem(
+                                    text = { Text(k.name) },
+                                    onClick = {
+                                        chosenKeyset = k
+                                        expandedDropdown = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // GApps Preservation Checkbox
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { preserveGapps = !preserveGapps }
+                ) {
+                    Checkbox(
+                        checked = preserveGapps,
+                        onCheckedChange = { preserveGapps = it }
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Préserver les signatures officielles Google / GApps (SafetyNet & Play Integrity)",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+
+                if (withVbmeta) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.tertiaryContainer,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "Option VBMETA activée : Une image vbmeta.img AVB 2.0 sera signée avec avb.pk8.",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onTertiaryContainer,
+                            modifier = Modifier.padding(8.dp)
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (createNewMode) {
+                        onConfirmCreateNew(newName, cn, org, country, algorithm, years.toIntOrNull() ?: 25, preserveGapps)
+                    } else {
+                        chosenKeyset?.let { onConfirmExisting(it, preserveGapps) }
+                    }
+                },
+                modifier = Modifier.testTag("rsigner_dialog_confirm_btn")
+            ) {
+                Text("Lancer la signature")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Annuler")
+            }
+        }
+    )
+}
+
