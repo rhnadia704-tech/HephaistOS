@@ -1344,54 +1344,13 @@ object GemeauSignerEngine {
     fun extractCertificateAndFingerprint(apk: File): Pair<X509Certificate?, String> {
         // 1. Try v2/v3 APK Signing Block first
         try {
-            RandomAccessFile(apk, "r").use { raf ->
-                val len = raf.length()
-                if (len > 1024) {
-                    val searchLen = minOf(len, 65536L).toInt()
-                    val tail = ByteArray(searchLen)
-                    raf.seek(len - searchLen)
-                    raf.readFully(tail)
-                    val magic = "APK Sig Block 42".toByteArray(Charsets.US_ASCII)
-                    var magicOffset = -1
-                    for (i in tail.size - 16 downTo 0) {
-                        var match = true
-                        for (j in 0 until 16) {
-                            if (tail[i + j] != magic[j]) { match = false; break }
-                        }
-                        if (match) {
-                            magicOffset = (len - searchLen + i).toInt()
-                            break
-                        }
-                    }
-                    if (magicOffset > 32) {
-                        raf.seek((magicOffset - 8).toLong())
-                        val blockSize = java.lang.Long.reverseBytes(raf.readLong())
-                        if (blockSize > 0 && blockSize < magicOffset) {
-                            val blockStart = magicOffset - blockSize + 8
-                            raf.seek(blockStart)
-                            while (raf.filePointer < magicOffset - 8) {
-                                if (magicOffset - 8 - raf.filePointer < 12) break
-                                val pairLen = java.lang.Long.reverseBytes(raf.readLong())
-                                if (pairLen <= 0 || pairLen > 10 * 1024 * 1024) break
-                                val pairId = Integer.reverseBytes(raf.readInt())
-                                if (pairId == 0x7109871a || pairId == -0xfa9c740 || pairId == 0xf05368c0.toInt()) {
-                                    val pairValueLen = (pairLen - 4).toInt()
-                                    val pairData = ByteArray(pairValueLen)
-                                    raf.readFully(pairData)
-                                    val cert = extractCertificateFromV2Pair(pairData)
-                                    if (cert != null) {
-                                        val fp = MessageDigest.getInstance("SHA-256").digest(cert.encoded)
-                                            .joinToString(":") { "%02X".format(it) }
-                                        return Pair(cert, fp)
-                                    }
-                                } else {
-                                    val skip = pairLen - 4
-                                    if (skip > 0) raf.seek(raf.filePointer + skip)
-                                }
-                            }
-                        }
-                    }
-                }
+            val schemes = mutableListOf<String>()
+            val sbCerts = AnalystEngine.extractCertsFromApkSigningBlock(apk, schemes)
+            if (sbCerts.isNotEmpty()) {
+                val cert = sbCerts.first()
+                val fp = MessageDigest.getInstance("SHA-256").digest(cert.encoded)
+                    .joinToString(":") { "%02X".format(it) }
+                return Pair(cert, fp)
             }
         } catch (_: Exception) {}
 
@@ -1985,70 +1944,20 @@ object GemeauSignerEngine {
 
         // 2. Inspect v2 / v3 APK Signing Block
         try {
-            RandomAccessFile(apkFile, "r").use { raf ->
-                val fileLen = raf.length()
-                if (fileLen > 1024) {
-                    val searchLen = minOf(fileLen, 65536L).toInt()
-                    val tailBytes = ByteArray(searchLen)
-                    raf.seek(fileLen - searchLen)
-                    raf.readFully(tailBytes)
-
-                    val magic = "APK Sig Block 42".toByteArray(Charsets.US_ASCII)
-                    var magicOffset = -1
-                    for (i in tailBytes.size - 16 downTo 0) {
-                        var match = true
-                        for (j in 0 until 16) {
-                            if (tailBytes[i + j] != magic[j]) {
-                                match = false
-                                break
-                            }
-                        }
-                        if (match) {
-                            magicOffset = (fileLen - searchLen + i).toInt()
-                            break
-                        }
-                    }
-
-                    if (magicOffset > 32) {
-                        hasV2 = true
-                        raf.seek((magicOffset - 8).toLong())
-                        val blockSize = java.lang.Long.reverseBytes(raf.readLong())
-                        if (blockSize > 0 && blockSize < magicOffset) {
-                            val blockStart = magicOffset - blockSize + 8
-                            raf.seek(blockStart)
-                            while (raf.filePointer < magicOffset - 8) {
-                                if (magicOffset - 8 - raf.filePointer < 12) break
-                                val pairLen = java.lang.Long.reverseBytes(raf.readLong())
-                                if (pairLen <= 0 || pairLen > 10 * 1024 * 1024) break
-                                val pairId = Integer.reverseBytes(raf.readInt())
-                                if (pairId == 0x7109871a) {
-                                    hasV2 = true
-                                    val pairData = ByteArray((pairLen - 4).toInt())
-                                    raf.readFully(pairData)
-                                    val v2Cert = extractCertificateFromV2Pair(pairData)
-                                    if (v2Cert != null && cert == null) {
-                                        cert = v2Cert
-                                    }
-                                } else if (pairId == -0xfa9c740 || pairId == 0xf05368c0.toInt()) {
-                                    hasV3 = true
-                                    val pairData = ByteArray((pairLen - 4).toInt())
-                                    raf.readFully(pairData)
-                                    val v3Cert = extractCertificateFromV2Pair(pairData)
-                                    if (v3Cert != null && cert == null) {
-                                        cert = v3Cert
-                                    }
-                                } else {
-                                    val skip = pairLen - 4
-                                    if (skip > 0) {
-                                        raf.seek(raf.filePointer + skip)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+            val signingBlockSchemes = mutableListOf<String>()
+            val sbCerts = AnalystEngine.extractCertsFromApkSigningBlock(apkFile, signingBlockSchemes)
+            if (signingBlockSchemes.contains("V2")) {
+                hasV2 = true
             }
-        } catch (_: Exception) {}
+            if (signingBlockSchemes.contains("V3")) {
+                hasV3 = true
+            }
+            if (cert == null && sbCerts.isNotEmpty()) {
+                cert = sbCerts.first()
+            }
+        } catch (e: Exception) {
+            errors.add("Erreur inspection APK Signing Block: ${e.message}")
+        }
 
         val isSigned = hasV1 || hasV2 || hasV3 || cert != null
         val sha256 = if (cert != null) {

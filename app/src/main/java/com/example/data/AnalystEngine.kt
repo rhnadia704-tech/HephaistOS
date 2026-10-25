@@ -25,11 +25,10 @@ import java.util.zip.ZipFile
 
 object AnalystEngine {
 
-    private const val APK_SIGNING_BLOCK_MAGIC_HI = 0x3234206b636f6c42L // "Block 42"
-    private const val APK_SIGNING_BLOCK_MAGIC_LO = 0x20676953204b5041L // "APK Sig "
+    private val APK_SIGNING_BLOCK_MAGIC = "APK Sig Block 42".toByteArray(Charsets.US_ASCII)
     private const val APK_SIGNATURE_SCHEME_V2_BLOCK_ID = 0x7109871a
-    private const val APK_SIGNATURE_SCHEME_V3_BLOCK_ID = -0xfac4940 // 0xf05368c0 as signed int
-    private const val APK_SIGNATURE_SCHEME_V4_BLOCK_ID = 0x1b93f612
+    private const val APK_SIGNATURE_SCHEME_V3_BLOCK_ID = -0x0fac9740 // 0xf05368c0.toInt()
+    private const val APK_SIGNATURE_SCHEME_V3_1_BLOCK_ID = 0x1b93f612
 
     /**
      * Executes complete, fact-based deep inspection of a target unpacked ROM / partition folder.
@@ -224,12 +223,83 @@ object AnalystEngine {
         sigJsonFile.writeText(sigArray.toString(2))
         onLog("[EXPORT] signatures.json écrit (${formatBytes(sigJsonFile.length())})", false)
 
-        // c) signature_report.txt (Exact textual format requested by user)
+        // c) signatures_by_group.json (Clusters APK signatures by certificate identity/group)
+        val sigByGroupFile = File(outDir, "signatures_by_group.json")
+        val groupsReportObj = JSONObject()
+        val signedApksList = apkSignatures.filter { it.isSigned && it.certificates.isNotEmpty() }
+        val unsignedApksList = apkSignatures.filter { !it.isSigned }
+
+        // Group by primary cert SHA-256 fingerprint
+        val groupedMap = signedApksList.groupBy { it.certificates.first().sha256Hex }
+        val groupsArray = JSONArray()
+
+        var groupCounter = 1
+        for ((_, apksInGroup) in groupedMap) {
+            val sampleCert = apksInGroup.first().certificates.first()
+            val groupObj = JSONObject()
+            val groupId = "group_$groupCounter"
+            groupCounter++
+
+            val groupName = guessKeyGroupName(sampleCert.subjectDn, apksInGroup.map { it.relativePath })
+
+            groupObj.put("groupId", groupId)
+            groupObj.put("groupName", groupName)
+            groupObj.put("subjectDn", sampleCert.subjectDn)
+            groupObj.put("issuerDn", sampleCert.issuerDn)
+            groupObj.put("isSelfSigned", sampleCert.isSelfSigned)
+            groupObj.put("validFrom", sampleCert.validFrom)
+            groupObj.put("validUntil", sampleCert.validUntil)
+            groupObj.put("sigAlgName", sampleCert.sigAlgName)
+            groupObj.put("sha256", sampleCert.sha256Hex)
+            groupObj.put("sha1", sampleCert.sha1Hex)
+            groupObj.put("md5", sampleCert.md5Hex)
+
+            val allSchemesInGroup = apksInGroup.flatMap { it.signatureSchemes }.distinct()
+            val sortedSchemes = sortSchemes(allSchemesInGroup)
+            groupObj.put("schemes", JSONArray(sortedSchemes))
+            groupObj.put("schemesDisplay", if (sortedSchemes.isEmpty()) "Non signé" else sortedSchemes.joinToString(" + "))
+            groupObj.put("apkCount", apksInGroup.size)
+
+            val apksArray = JSONArray()
+            for (apk in apksInGroup) {
+                val aObj = JSONObject()
+                aObj.put("path", apk.relativePath)
+                aObj.put("fileName", apk.fileName)
+                aObj.put("fileSize", apk.fileSize)
+                aObj.put("formattedSize", apk.formattedSize)
+                aObj.put("schemes", JSONArray(apk.signatureSchemes))
+                aObj.put("schemesDisplay", apk.schemesDisplay)
+                apksArray.put(aObj)
+            }
+            groupObj.put("apks", apksArray)
+            groupsArray.put(groupObj)
+        }
+
+        val unsignedArray = JSONArray()
+        for (uApk in unsignedApksList) {
+            val uObj = JSONObject()
+            uObj.put("path", uApk.relativePath)
+            uObj.put("fileName", uApk.fileName)
+            uObj.put("fileSize", uApk.fileSize)
+            uObj.put("formattedSize", uApk.formattedSize)
+            unsignedArray.put(uObj)
+        }
+
+        groupsReportObj.put("totalGroups", groupedMap.size)
+        groupsReportObj.put("totalSignedApks", signedApksList.size)
+        groupsReportObj.put("totalUnsignedApks", unsignedApksList.size)
+        groupsReportObj.put("groups", groupsArray)
+        groupsReportObj.put("unsignedApks", unsignedArray)
+
+        sigByGroupFile.writeText(groupsReportObj.toString(2))
+        onLog("[EXPORT] signatures_by_group.json écrit (${formatBytes(sigByGroupFile.length())}, ${groupedMap.size} groupes)", false)
+
+        // d) signature_report.txt (Exact textual format requested by user)
         val sigReportFile = File(outDir, "signature_report.txt")
         sigReportFile.writeText(signatureReportBuilder.toString())
         onLog("[EXPORT] signature_report.txt écrit (${formatBytes(sigReportFile.length())})", false)
 
-        // d) hals_blobs.json
+        // e) hals_blobs.json
         val halsJsonFile = File(outDir, "hals_blobs.json")
         val halsArray = JSONArray()
         for (elf in elfBinaries) {
@@ -252,7 +322,7 @@ object AnalystEngine {
         halsJsonFile.writeText(halsArray.toString(2))
         onLog("[EXPORT] hals_blobs.json écrit (${formatBytes(halsJsonFile.length())})", false)
 
-        // e) summary_manifest.json
+        // f) summary_manifest.json
         val duration = System.currentTimeMillis() - startTime
         val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
         val signedApks = apkSignatures.count { it.isSigned }
@@ -275,6 +345,7 @@ object AnalystEngine {
         val generatedFilesList = listOf(
             treeJsonFile.name,
             sigJsonFile.name,
+            sigByGroupFile.name,
             sigReportFile.name,
             halsJsonFile.name,
             "summary_manifest.json"
@@ -304,6 +375,7 @@ object AnalystEngine {
             formattedTotalSize = formatBytes(totalBytes),
             totalApks = apkFiles.size,
             signedApksCount = signedApks,
+            totalSignatureGroups = groupedMap.size,
             totalElfBinaries = elfBinaries.size,
             totalHalsFound = halsFound.size,
             analysisDurationMs = duration,
@@ -323,7 +395,7 @@ object AnalystEngine {
     }
 
     /**
-     * Inspects an APK / APEX file for V1/V2/V3 signatures and builds the exact textual format required.
+     * Inspects an APK / APEX file for V1/V2/V3/V4 signatures and builds the exact textual format required.
      */
     fun inspectApkSignature(
         apkFile: File,
@@ -360,20 +432,26 @@ object AnalystEngine {
             }
         } catch (_: Exception) {}
 
-        // 2. Check V2 / V3 Signature Block
+        // 2. Check V2 / V3 / V4 Signature Block
         try {
-            val v2Certs = extractCertsFromApkSigningBlock(apkFile, schemes)
-            for (c in v2Certs) {
+            val signingBlockCerts = extractCertsFromApkSigningBlock(apkFile, schemes)
+            for (c in signingBlockCerts) {
                 if (!certs.contains(c)) certs.add(c)
             }
         } catch (_: Exception) {}
 
-        // 3. Fallback: If no certs extracted via raw stream, try fallback parsing
-        val isSigned = certs.isNotEmpty()
+        // 3. Check V4 scheme if adjacent .idsig exists
+        val idsigFile = File("${apkFile.absolutePath}.idsig")
+        if (idsigFile.exists() && idsigFile.length() > 0 && !schemes.contains("V4")) {
+            schemes.add("V4")
+        }
+
+        val isSigned = certs.isNotEmpty() || schemes.isNotEmpty()
+        val sortedSchemes = sortSchemes(schemes)
         val schemesDisplay = if (!isSigned) {
             "Non signé"
         } else {
-            schemes.sorted().joinToString(" + ")
+            sortedSchemes.joinToString(" + ")
         }
 
         val certDetailsList = mutableListOf<CertDetails>()
@@ -383,8 +461,12 @@ object AnalystEngine {
         textReport.append("Chemin: $relativePath\n\n")
         textReport.append("Schéma de signature\u00a0: $schemesDisplay\n")
 
-        if (!isSigned) {
-            textReport.append("\nAucun certificat cryptographique trouvé.\n")
+        if (certs.isEmpty()) {
+            if (isSigned) {
+                textReport.append("\nSignature détectée ($schemesDisplay) sans certificat X.509 extractible.\n")
+            } else {
+                textReport.append("\nAucun certificat cryptographique trouvé.\n")
+            }
         } else {
             for ((cIdx, cert) in certs.withIndex()) {
                 val certNum = cIdx + 1
@@ -422,10 +504,10 @@ object AnalystEngine {
                 val sha512Hex = hashBytes(encodedBytes, "SHA-512")
 
                 val certBase64 = encodeBase64(encodedBytes)
-                val signatureBytes = cert.signature
-                val sigBitsHex = bytesToHex(signatureBytes)
-                val pubKeyStr = cert.publicKey.toString().trim()
-                val sigBase64 = encodeBase64(signatureBytes)
+                // apktoolM format: Bits de signature is the DER encoded certificate bytes in hex
+                val sigBitsHex = bytesToHex(encodedBytes)
+                val pubKeyStr = formatPublicKey(cert.publicKey)
+                val sigBase64 = encodeBase64(cert.signature)
 
                 val details = CertDetails(
                     certIndex = certNum,
@@ -487,7 +569,7 @@ object AnalystEngine {
             fileSize = apkFile.length(),
             formattedSize = formatBytes(apkFile.length()),
             interfaceVersion = "Interface v16 (36)",
-            signatureSchemes = schemes,
+            signatureSchemes = sortedSchemes,
             schemesDisplay = schemesDisplay,
             isSigned = isSigned,
             certificates = certDetailsList,
@@ -496,97 +578,173 @@ object AnalystEngine {
     }
 
     /**
-     * Parses APK Signing Block to extract V2 and V3 schemes and raw X509 certificates.
+     * Parses APK Signing Block to accurately detect V2, V3, and V4 schemes and extract X.509 certificates.
      */
-    private fun extractCertsFromApkSigningBlock(
+    fun extractCertsFromApkSigningBlock(
         apkFile: File,
         schemesOut: MutableList<String>
     ): List<X509Certificate> {
         val certs = mutableListOf<X509Certificate>()
         if (apkFile.length() < 32) return certs
 
-        RandomAccessFile(apkFile, "r").use { raf ->
-            val fileLen = raf.length()
-            // Find ZIP End of Central Directory (EOCD)
-            val eocdSearchLen = 65536.coerceAtMost(fileLen.toInt())
-            val buffer = ByteArray(eocdSearchLen)
-            val eocdSearchStart = fileLen - eocdSearchLen
-            raf.seek(eocdSearchStart)
-            raf.readFully(buffer)
+        try {
+            RandomAccessFile(apkFile, "r").use { raf ->
+                val cdOffset = findCentralDirectoryOffset(raf)
+                if (cdOffset < 24) return certs
 
-            var eocdOffset = -1L
-            for (i in eocdSearchLen - 22 downTo 0) {
-                if (buffer[i] == 0x50.toByte() && buffer[i + 1] == 0x4b.toByte() &&
-                    buffer[i + 2] == 0x05.toByte() && buffer[i + 3] == 0x06.toByte()
-                ) {
-                    eocdOffset = eocdSearchStart + i
-                    break
+                // 1. Magic check (16 bytes right before cdOffset)
+                raf.seek(cdOffset - 16)
+                val magicBytes = ByteArray(16)
+                raf.readFully(magicBytes)
+                if (!magicBytes.contentEquals(APK_SIGNING_BLOCK_MAGIC)) {
+                    return certs
                 }
-            }
-            if (eocdOffset == -1L) return certs
 
-            // Central directory offset is at offset 16 of EOCD
-            raf.seek(eocdOffset + 16)
-            val cdOffset = readLittleEndianInt(raf).toLong() and 0xFFFFFFFFL
-            if (cdOffset < 24) return certs
-
-            // Magic of APK Signing block is 16 bytes before cdOffset
-            raf.seek(cdOffset - 16)
-            val magicLo = raf.readLong()
-            val magicHi = raf.readLong()
-
-            // Check APK Sig Block 42 magic
-            if (magicLo == APK_SIGNING_BLOCK_MAGIC_LO && magicHi == APK_SIGNING_BLOCK_MAGIC_HI) {
-                // Block size is 24 bytes before cdOffset
+                // 2. Read blockSizeInFooter (8 bytes right before magic, at cdOffset - 24)
                 raf.seek(cdOffset - 24)
-                val blockSizeInFooter = raf.readLong()
-                val blockStart = cdOffset - 8 - blockSizeInFooter
-                if (blockStart >= 0) {
-                    raf.seek(blockStart)
-                    val blockSizeInHeader = raf.readLong()
-                    if (blockSizeInHeader == blockSizeInFooter) {
-                        // Read key-value pairs of APK Signing Block
-                        var remaining = blockSizeInFooter - 24
-                        val certFactory = CertificateFactory.getInstance("X.509")
+                val sizeFooterBuf = ByteArray(8)
+                raf.readFully(sizeFooterBuf)
+                val blockSizeInFooter = ByteBuffer.wrap(sizeFooterBuf).order(ByteOrder.LITTLE_ENDIAN).long
+                if (blockSizeInFooter < 24 || blockSizeInFooter > cdOffset) {
+                    return certs
+                }
 
-                        while (remaining > 12) {
-                            val pairLen = raf.readLong()
-                            val id = raf.readInt()
-                            remaining -= (8 + pairLen)
-                            val dataLen = (pairLen - 4).toInt()
+                // 3. Read blockSizeInHeader (8 bytes at cdOffset - blockSizeInFooter - 8)
+                val blockStart = cdOffset - blockSizeInFooter - 8
+                if (blockStart < 0) return certs
 
-                            if (id == APK_SIGNATURE_SCHEME_V2_BLOCK_ID) {
-                                if (!schemesOut.contains("V2")) schemesOut.add("V2")
-                                parseSignersCertificates(raf, dataLen, certFactory, certs)
-                            } else if (id == APK_SIGNATURE_SCHEME_V3_BLOCK_ID) {
-                                if (!schemesOut.contains("V3")) schemesOut.add("V3")
-                                parseSignersCertificates(raf, dataLen, certFactory, certs)
-                            } else if (id == APK_SIGNATURE_SCHEME_V4_BLOCK_ID) {
-                                if (!schemesOut.contains("V4")) schemesOut.add("V4")
-                                raf.skipBytes(dataLen)
-                            } else {
-                                raf.skipBytes(dataLen)
-                            }
+                raf.seek(blockStart)
+                val sizeHeaderBuf = ByteArray(8)
+                raf.readFully(sizeHeaderBuf)
+                val blockSizeInHeader = ByteBuffer.wrap(sizeHeaderBuf).order(ByteOrder.LITTLE_ENDIAN).long
+                if (blockSizeInHeader != blockSizeInFooter) {
+                    return certs
+                }
+
+                // 4. Read all ID-value pairs between blockStart + 8 and cdOffset - 24
+                val pairsSize = (blockSizeInFooter - 24).toInt()
+                if (pairsSize <= 0) return certs
+
+                val pairsBytes = ByteArray(pairsSize)
+                raf.seek(blockStart + 8)
+                raf.readFully(pairsBytes)
+
+                val pairsBuf = ByteBuffer.wrap(pairsBytes).order(ByteOrder.LITTLE_ENDIAN)
+                val certFactory = CertificateFactory.getInstance("X.509")
+
+                while (pairsBuf.remaining() >= 12) {
+                    val pairLen = pairsBuf.long
+                    if (pairLen < 4 || pairLen > pairsBuf.remaining() + 8) break
+                    val pairId = pairsBuf.int
+                    val valueLen = (pairLen - 4).toInt()
+                    if (valueLen < 0 || valueLen > pairsBuf.remaining()) break
+
+                    val valueBytes = ByteArray(valueLen)
+                    pairsBuf.get(valueBytes)
+
+                    when {
+                        pairId == APK_SIGNATURE_SCHEME_V2_BLOCK_ID -> {
+                            if (!schemesOut.contains("V2")) schemesOut.add("V2")
+                            parseSignersCertificates(valueBytes, certFactory, certs)
+                        }
+                        pairId == APK_SIGNATURE_SCHEME_V3_BLOCK_ID || (pairId.toLong() and 0xFFFFFFFFL) == 0xf05368c0L -> {
+                            if (!schemesOut.contains("V3")) schemesOut.add("V3")
+                            parseSignersCertificates(valueBytes, certFactory, certs)
+                        }
+                        pairId == APK_SIGNATURE_SCHEME_V3_1_BLOCK_ID -> {
+                            if (!schemesOut.contains("V3.1")) schemesOut.add("V3.1")
+                            parseSignersCertificates(valueBytes, certFactory, certs)
                         }
                     }
                 }
             }
-        }
+        } catch (_: Exception) {}
+
         return certs
     }
 
+    /**
+     * Finds the start offset of the Central Directory by searching for the ZIP End of Central Directory (EOCD).
+     */
+    fun findCentralDirectoryOffset(raf: RandomAccessFile): Long {
+        val fileLen = raf.length()
+        if (fileLen < 22) return -1L
+
+        val searchLen = 65557.coerceAtMost(fileLen.toInt())
+        val buffer = ByteArray(searchLen)
+        val searchStart = fileLen - searchLen
+        raf.seek(searchStart)
+        raf.readFully(buffer)
+
+        var eocdOffset = -1L
+        // Search backwards for EOCD signature 0x06054b50 (little-endian: 0x50, 0x4b, 0x05, 0x06)
+        for (i in searchLen - 22 downTo 0) {
+            if (buffer[i] == 0x50.toByte() &&
+                buffer[i + 1] == 0x4b.toByte() &&
+                buffer[i + 2] == 0x05.toByte() &&
+                buffer[i + 3] == 0x06.toByte()
+            ) {
+                val commentLen = (buffer[i + 20].toInt() and 0xFF) or ((buffer[i + 21].toInt() and 0xFF) shl 8)
+                if (i + 22 + commentLen <= searchLen) {
+                    eocdOffset = searchStart + i
+                    break
+                }
+            }
+        }
+
+        if (eocdOffset == -1L) {
+            for (i in searchLen - 22 downTo 0) {
+                if (buffer[i] == 0x50.toByte() &&
+                    buffer[i + 1] == 0x4b.toByte() &&
+                    buffer[i + 2] == 0x05.toByte() &&
+                    buffer[i + 3] == 0x06.toByte()
+                ) {
+                    eocdOffset = searchStart + i
+                    break
+                }
+            }
+        }
+
+        if (eocdOffset == -1L) return -1L
+
+        raf.seek(eocdOffset + 16)
+        val cdOffsetBuf = ByteArray(4)
+        raf.readFully(cdOffsetBuf)
+        var cdOffset = ByteBuffer.wrap(cdOffsetBuf).order(ByteOrder.LITTLE_ENDIAN).int.toLong() and 0xFFFFFFFFL
+
+        // Check Zip64 EOCD if cdOffset is 0xFFFFFFFF
+        if (cdOffset == 0xFFFFFFFFL && eocdOffset >= 20) {
+            try {
+                raf.seek(eocdOffset - 20)
+                val zip64Locator = ByteArray(20)
+                raf.readFully(zip64Locator)
+                val locBuf = ByteBuffer.wrap(zip64Locator).order(ByteOrder.LITTLE_ENDIAN)
+                if (locBuf.int == 0x07064b50) {
+                    locBuf.int // disk
+                    val zip64EocdOffset = locBuf.long
+                    if (zip64EocdOffset in 0 until fileLen - 56) {
+                        raf.seek(zip64EocdOffset)
+                        val zip64Eocd = ByteArray(56)
+                        raf.readFully(zip64Eocd)
+                        val eocd64Buf = ByteBuffer.wrap(zip64Eocd).order(ByteOrder.LITTLE_ENDIAN)
+                        if (eocd64Buf.int == 0x06064b50) {
+                            eocd64Buf.position(48)
+                            cdOffset = eocd64Buf.long
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+
+        return cdOffset
+    }
+
     private fun parseSignersCertificates(
-        raf: RandomAccessFile,
-        length: Int,
+        blockBytes: ByteArray,
         certFactory: CertificateFactory,
         outCerts: MutableList<X509Certificate>
     ) {
-        if (length <= 4) {
-            raf.skipBytes(length)
-            return
-        }
-        val blockBytes = ByteArray(length)
-        raf.readFully(blockBytes)
+        if (blockBytes.size <= 4) return
         val buf = ByteBuffer.wrap(blockBytes).order(ByteOrder.LITTLE_ENDIAN)
 
         try {
@@ -594,40 +752,48 @@ object AnalystEngine {
             if (buf.remaining() >= 4) {
                 val signersLen = buf.getInt()
                 if (signersLen in 1..buf.remaining()) {
-                    val signerBuf = buf.slice().order(ByteOrder.LITTLE_ENDIAN)
-                    signerBuf.limit(signersLen)
+                    val signersBuf = buf.slice().order(ByteOrder.LITTLE_ENDIAN)
+                    signersBuf.limit(signersLen)
 
-                    if (signerBuf.remaining() >= 4) {
-                        val signedDataLen = signerBuf.getInt()
-                        if (signedDataLen in 1..signerBuf.remaining()) {
-                            val signedDataBuf = signerBuf.slice().order(ByteOrder.LITTLE_ENDIAN)
-                            signedDataBuf.limit(signedDataLen)
+                    while (signersBuf.remaining() >= 4) {
+                        val signerLen = signersBuf.getInt()
+                        if (signerLen !in 1..signersBuf.remaining()) break
+                        val signerBuf = signersBuf.slice().order(ByteOrder.LITTLE_ENDIAN)
+                        signerBuf.limit(signerLen)
+                        signersBuf.position(signersBuf.position() + signerLen)
 
-                            // Skip digests
-                            if (signedDataBuf.remaining() >= 4) {
-                                val digestsLen = signedDataBuf.getInt()
-                                if (digestsLen in 0..signedDataBuf.remaining()) {
-                                    signedDataBuf.position(signedDataBuf.position() + digestsLen)
+                        if (signerBuf.remaining() >= 4) {
+                            val signedDataLen = signerBuf.getInt()
+                            if (signedDataLen in 1..signerBuf.remaining()) {
+                                val signedDataBuf = signerBuf.slice().order(ByteOrder.LITTLE_ENDIAN)
+                                signedDataBuf.limit(signedDataLen)
 
-                                    // Certificates sequence
-                                    if (signedDataBuf.remaining() >= 4) {
-                                        val certsSeqLen = signedDataBuf.getInt()
-                                        val certsBuf = signedDataBuf.slice().order(ByteOrder.LITTLE_ENDIAN)
-                                        certsBuf.limit(certsSeqLen.coerceAtMost(signedDataBuf.remaining()))
+                                // Skip digests
+                                if (signedDataBuf.remaining() >= 4) {
+                                    val digestsLen = signedDataBuf.getInt()
+                                    if (digestsLen in 0..signedDataBuf.remaining()) {
+                                        signedDataBuf.position(signedDataBuf.position() + digestsLen)
 
-                                        while (certsBuf.remaining() >= 4) {
-                                            val certLen = certsBuf.getInt()
-                                            if (certLen in 1..certsBuf.remaining()) {
-                                                val certBytes = ByteArray(certLen)
-                                                certsBuf.get(certBytes)
-                                                try {
-                                                    val cert = certFactory.generateCertificate(ByteArrayInputStream(certBytes)) as? X509Certificate
-                                                    if (cert != null && !outCerts.contains(cert)) {
-                                                        outCerts.add(cert)
-                                                    }
-                                                } catch (_: Exception) {}
-                                            } else {
-                                                break
+                                        // Certificates sequence
+                                        if (signedDataBuf.remaining() >= 4) {
+                                            val certsSeqLen = signedDataBuf.getInt()
+                                            val certsBuf = signedDataBuf.slice().order(ByteOrder.LITTLE_ENDIAN)
+                                            certsBuf.limit(certsSeqLen.coerceAtMost(signedDataBuf.remaining()))
+
+                                            while (certsBuf.remaining() >= 4) {
+                                                val certLen = certsBuf.getInt()
+                                                if (certLen in 1..certsBuf.remaining()) {
+                                                    val certBytes = ByteArray(certLen)
+                                                    certsBuf.get(certBytes)
+                                                    try {
+                                                        val cert = certFactory.generateCertificate(ByteArrayInputStream(certBytes)) as? X509Certificate
+                                                        if (cert != null && !outCerts.contains(cert)) {
+                                                            outCerts.add(cert)
+                                                        }
+                                                    } catch (_: Exception) {}
+                                                } else {
+                                                    break
+                                                }
                                             }
                                         }
                                     }
@@ -638,6 +804,37 @@ object AnalystEngine {
                 }
             }
         } catch (_: Exception) {}
+
+        // Fallback: If structured parsing didn't find certs, scan for ASN.1 DER sequence of X.509
+        if (outCerts.isEmpty()) {
+            scanAndExtractCertificatesDer(blockBytes, certFactory, outCerts)
+        }
+    }
+
+    private fun scanAndExtractCertificatesDer(
+        bytes: ByteArray,
+        certFactory: CertificateFactory,
+        outCerts: MutableList<X509Certificate>
+    ) {
+        for (i in 0 until bytes.size - 64) {
+            // Check ASN.1 DER SEQUENCE tag 0x30, 0x82 followed by length
+            if (bytes[i] == 0x30.toByte() && bytes[i + 1] == 0x82.toByte()) {
+                val len = ((bytes[i + 2].toInt() and 0xFF) shl 8) or (bytes[i + 3].toInt() and 0xFF)
+                val totalDerLen = len + 4
+                if (totalDerLen in 64..(bytes.size - i)) {
+                    // Check if inner structure is also a SEQUENCE (TBSCertificate)
+                    if (bytes[i + 4] == 0x30.toByte() && bytes[i + 5] == 0x82.toByte()) {
+                        try {
+                            val stream = ByteArrayInputStream(bytes, i, totalDerLen)
+                            val cert = certFactory.generateCertificate(stream) as? X509Certificate
+                            if (cert != null && !outCerts.contains(cert)) {
+                                outCerts.add(cert)
+                            }
+                        } catch (_: Exception) {}
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -817,5 +1014,43 @@ object AnalystEngine {
         val digitGroups = (Math.log10(bytes.toDouble()) / Math.log10(1024.0)).toInt().coerceIn(0, units.size - 1)
         val value = bytes / Math.pow(1024.0, digitGroups.toDouble())
         return "%.1f %s".format(Locale.US, value, units[digitGroups])
+    }
+
+    fun sortSchemes(schemes: Collection<String>): List<String> {
+        val order = mapOf("V1" to 1, "V2" to 2, "V3" to 3, "V3.1" to 4, "V4" to 5)
+        return schemes.distinct().sortedBy { order[it] ?: 99 }
+    }
+
+    fun formatPublicKey(pubKey: java.security.PublicKey): String {
+        return when (pubKey) {
+            is java.security.interfaces.RSAPublicKey -> {
+                val modHex = pubKey.modulus.toString(16)
+                val expHex = pubKey.publicExponent.toString(16)
+                "OpenSSLRSAPublicKey{modulus=$modHex,publicExponent=$expHex}"
+            }
+            is java.security.interfaces.ECPublicKey -> {
+                val w = pubKey.w
+                val xHex = w.affineX.toString(16)
+                val yHex = w.affineY.toString(16)
+                "OpenSSLECPublicKey{x=$xHex,y=$yHex}"
+            }
+            else -> pubKey.toString().trim()
+        }
+    }
+
+    fun guessKeyGroupName(subjectDn: String, apkPaths: List<String>): String {
+        val cn = Regex("CN=([^,]+)").find(subjectDn)?.groupValues?.get(1)?.trim() ?: ""
+        val pathsConcat = apkPaths.joinToString(" ") { it.lowercase(Locale.ROOT) }
+
+        val roleSuffix = when {
+            pathsConcat.contains("systemui") || pathsConcat.contains("framework-res") || pathsConcat.contains("settings") -> " (Platform Key)"
+            pathsConcat.contains("media") || pathsConcat.contains("gallery") -> " (Media Key)"
+            pathsConcat.contains("shared") || pathsConcat.contains("contacts") -> " (Shared UID Key)"
+            pathsConcat.contains("networkstack") -> " (NetworkStack Key)"
+            pathsConcat.contains("bluetooth") -> " (Bluetooth Key)"
+            pathsConcat.contains("vendor") -> " (Vendor Key)"
+            else -> ""
+        }
+        return if (cn.isNotBlank()) "$cn$roleSuffix" else if (roleSuffix.isNotBlank()) roleSuffix.trim() else "Groupe de Signature"
     }
 }

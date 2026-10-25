@@ -83,6 +83,7 @@ data class AnalystReportSummary(
     val formattedTotalSize: String = "0 B",
     val totalApks: Int = 0,
     val signedApksCount: Int = 0,
+    val totalSignatureGroups: Int = 0,
     val totalElfBinaries: Int = 0,
     val totalHalsFound: Int = 0,
     val analysisDurationMs: Long = 0L,
@@ -99,4 +100,39 @@ data class AnalystUiState(
     val logs: List<TerminalEntry> = emptyList(),
     val lastSummary: AnalystReportSummary? = null,
     val previewReportText: String = ""
+)
+
+data class SignatureGroupApkEntry(
+    val path: String,
+    val fileName: String,
+    val fileSize: Long,
+    val formattedSize: String,
+    val schemes: List<String>,
+    val schemesDisplay: String
+)
+
+data class SignatureGroup(
+    val groupId: String,
+    val groupName: String,
+    val subjectDn: String,
+    val issuerDn: String,
+    val isSelfSigned: Boolean,
+    val validFrom: String,
+    val validUntil: String,
+    val sigAlgName: String,
+    val sha256: String,
+    val sha1: String,
+    val md5: String,
+    val schemes: List<String>,
+    val schemesDisplay: String,
+    val apkCount: Int,
+    val apks: List<SignatureGroupApkEntry>
+)
+
+data class SignaturesByGroupReport(
+    val totalGroups: Int,
+    val totalSignedApks: Int,
+    val totalUnsignedApks: Int,
+    val groups: List<SignatureGroup>,
+    val unsignedApks: List<SignatureGroupApkEntry> = emptyList()
 )

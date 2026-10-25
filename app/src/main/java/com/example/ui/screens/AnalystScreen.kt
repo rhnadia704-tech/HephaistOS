@@ -469,7 +469,7 @@ private fun AnalystResultSummaryCard(
             // Metric Badges Grid
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 MetricItem(
                     label = "Fichiers",
@@ -487,9 +487,14 @@ private fun AnalystResultSummaryCard(
                     modifier = Modifier.weight(1.3f)
                 )
                 MetricItem(
+                    label = "Groupes",
+                    value = "${summary.totalSignatureGroups}",
+                    modifier = Modifier.weight(0.9f)
+                )
+                MetricItem(
                     label = "HALs",
                     value = "${summary.totalHalsFound}",
-                    modifier = Modifier.weight(0.9f)
+                    modifier = Modifier.weight(0.8f)
                 )
             }
 
