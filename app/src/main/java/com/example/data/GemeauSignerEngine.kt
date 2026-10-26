@@ -484,42 +484,69 @@ object GemeauSignerEngine {
         certificate: X509Certificate
     ): ByteArray {
         val md = MessageDigest.getInstance("SHA-256")
+        val chunkSize = 1048576
+        val chunkDigests = mutableListOf<ByteArray>()
+        val chunkBuf = ByteArray(chunkSize)
 
-        // Stream and digest section in 1 MB chunks without high RAM allocation
-        fun digestSection(startOffset: Long, totalLength: Long): ByteArray {
-            val chunkSize = 1048576
-            val chunkDigests = mutableListOf<ByteArray>()
-            val chunkBuf = ByteArray(chunkSize)
-            var remaining = totalLength
-            raf.seek(startOffset)
-            while (remaining > 0) {
-                val len = minOf(chunkSize.toLong(), remaining).toInt()
-                raf.readFully(chunkBuf, 0, len)
-                md.reset()
-                md.update(0x5a.toByte())
-                md.update(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(len).array())
-                md.update(chunkBuf, 0, len)
-                chunkDigests.add(md.digest())
-                remaining -= len
-            }
+        // 1. Process Section 1 (0 .. sec1Len)
+        // AOSP ApkSigningBlockUtils: each 1 MB chunk is prefixed with 0xa5, 4-byte LE length, and data
+        var remSec1 = sec1Len
+        raf.seek(sec1Offset)
+        while (remSec1 > 0) {
+            val toRead = minOf(chunkSize.toLong(), remSec1).toInt()
+            raf.readFully(chunkBuf, 0, toRead)
             md.reset()
-            md.update(0x5a.toByte())
-            md.update(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(chunkDigests.size).array())
-            for (d in chunkDigests) md.update(d)
-            return md.digest()
+            md.update(0xa5.toByte()) // CONTENT_DIGESTED_CHUNK_PREFIX_A5
+            md.update(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(toRead).array())
+            md.update(chunkBuf, 0, toRead)
+            chunkDigests.add(md.digest())
+            remSec1 -= toRead
         }
 
-        val d1 = digestSection(sec1Offset, sec1Len)
-        val d3 = digestSection(sec3Offset, sec3Len)
-        val d4 = digestSection(sec4Offset, sec4Len)
+        // 2. Process Section 3 (Central Directory: sec3Offset .. sec3Offset + sec3Len)
+        var remSec3 = sec3Len
+        raf.seek(sec3Offset)
+        while (remSec3 > 0) {
+            val toRead = minOf(chunkSize.toLong(), remSec3).toInt()
+            raf.readFully(chunkBuf, 0, toRead)
+            md.reset()
+            md.update(0xa5.toByte()) // CONTENT_DIGESTED_CHUNK_PREFIX_A5
+            md.update(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(toRead).array())
+            md.update(chunkBuf, 0, toRead)
+            chunkDigests.add(md.digest())
+            remSec3 -= toRead
+        }
 
+        // 3. Process Section 4 (EoCD: Central Directory offset at offset 16 updated to sec1Len)
+        val sec4Bytes = ByteArray(sec4Len.toInt())
+        raf.seek(sec4Offset)
+        raf.readFully(sec4Bytes)
+        // In AOSP ApkSigningBlockUtils: setZipEocdCentralDirectoryOffset sets CD offset to the start of APK signing block (sec1Len)
+        ByteBuffer.wrap(sec4Bytes).order(ByteOrder.LITTLE_ENDIAN).putInt(16, sec1Len.toInt())
+
+        var remSec4 = sec4Bytes.size
+        var offSec4 = 0
+        while (remSec4 > 0) {
+            val toRead = minOf(chunkSize, remSec4)
+            md.reset()
+            md.update(0xa5.toByte()) // CONTENT_DIGESTED_CHUNK_PREFIX_A5
+            md.update(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(toRead).array())
+            md.update(sec4Bytes, offSec4, toRead)
+            chunkDigests.add(md.digest())
+            offSec4 += toRead
+            remSec4 -= toRead
+        }
+
+        // 4. Compute final content digest: SHA-256 over 0x5a + totalChunkCount + chunkDigests
+        val totalChunkCount = chunkDigests.size
+        val concatenation = ByteBuffer.allocate(1 + 4 + totalChunkCount * 32).order(ByteOrder.LITTLE_ENDIAN)
+        concatenation.put(0x5a.toByte()) // AOSP BUFFER_PREFIX
+        concatenation.putInt(totalChunkCount)
+        for (cd in chunkDigests) {
+            concatenation.put(cd)
+        }
         md.reset()
-        md.update(0x5a.toByte())
-        md.update(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(3).array())
-        md.update(d1)
-        md.update(d3)
-        md.update(d4)
-        val finalContentDigest = md.digest()
+        val finalContentDigest = md.digest(concatenation.array())
 
         // 1. Digests sequence
         // In AOSP ApkSigningBlockUtils:
@@ -1957,7 +1984,7 @@ object GemeauSignerEngine {
         onLog: (String) -> Unit
     ): RomTrustChainReport = withContext(Dispatchers.IO) {
         val rsignerDir = WorkspaceManager.getSignerRSignerDir(context)
-        val dataDir = WorkspaceManager.getSignerDataDir(context)
+        val dataDir = WorkspaceManager.getSignerRSignerDataDir(context)
 
         onLog("=======================================================")
         onLog("[R-SIGNER PIPELINE] Démarrage de la resignature professionnelle de ROM")
@@ -1966,6 +1993,7 @@ object GemeauSignerEngine {
         onLog("Option AVB Vbmeta : ${if (withVbmeta) "ACTIVÉE (Synthèse vbmeta.img)" else "DÉSACTIVÉE"}")
         onLog("Préservation GApps : ${if (preserveGapps) "ACTIVÉE (SafetyNet / Play Integrity sécurisé)" else "DÉSACTIVÉE"}")
         onLog("Destination : ${rsignerDir.absolutePath}")
+        onLog("Base de données factuelle : ${dataDir.absolutePath}")
         onLog("=======================================================")
 
         // STEP 1: Deep Target Scan & Extraction
@@ -2026,6 +2054,29 @@ object GemeauSignerEngine {
             }
         } else {
             val unpackedCandidate = File(WorkspaceManager.getUnpackedDir(context), targetFile.nameWithoutExtension)
+            if (!unpackedCandidate.exists() || unpackedCandidate.listFiles().isNullOrEmpty()) {
+                if (targetFile.extension.equals("img", ignoreCase = true)) {
+                    onLog("[R-SIGNER] Image brute détectée (${targetFile.name}). Déballage automatique via UkaEngine...")
+                    onProgress("Phase 1/6 : Déballage automatique de l'image ${targetFile.name}...", 0.12f, 0, 100)
+                    val meta = UkaEngine.analyzeTarget(targetFile)
+                    val partitions = if (meta.partitions.isNotEmpty()) meta.partitions.map { it.name } else listOf("system")
+                    val unpackRes = UkaEngine.executeUnpack(
+                        context = context,
+                        targetFile = targetFile,
+                        metadata = meta,
+                        selectedPartitions = partitions,
+                        onProgress = { step, p, msg ->
+                            onProgress("Déballage : $step", 0.10f + 0.10f * p, 0, 100)
+                            onLog(msg)
+                        }
+                    )
+                    unpackRes.onSuccess {
+                        onLog("[SUCCÈS DÉBALLAGE] Partition déballée avec succès dans UNPACKED/${targetFile.nameWithoutExtension}")
+                    }.onFailure { err ->
+                        onLog("[AVERTISSEMENT DÉBALLAGE] Échec du déballage automatique : ${err.message}. Poursuite avec extraction.")
+                    }
+                }
+            }
             val scanDir = if (unpackedCandidate.exists() && unpackedCandidate.isDirectory) unpackedCandidate else {
                 extractApksFromRom(targetFile, workDir, { _, _ -> }, onLog)
                 workDir
@@ -2310,6 +2361,7 @@ object GemeauSignerEngine {
         val auditReportFile = File(rsignerDir, "rsigner_audit_report.md")
         auditReportFile.writeText(auditReportText)
         try {
+            File(dataDir, "rsigner_audit_report.md").writeText(auditReportText)
             File(WorkspaceManager.getSignerRSignerReportsDir(context), "rsigner_audit_report.md").writeText(auditReportText)
         } catch (_: Exception) {}
 
@@ -2327,7 +2379,32 @@ object GemeauSignerEngine {
         val manifestJsonFile = File(rsignerDir, "rsigner_execution_manifest.json")
         manifestJsonFile.writeText(manifestContent)
         try {
+            File(dataDir, "rsigner_execution_manifest.json").writeText(manifestContent)
             File(WorkspaceManager.getSignerRSignerReportsDir(context), "rsigner_execution_manifest.json").writeText(manifestContent)
+        } catch (_: Exception) {}
+
+        // Replicate redistribution map & gapps manifest into dataDir and mappingsDir
+        try {
+            val redistMapJson = JSONObject().apply {
+                val mapObj = JSONObject()
+                clusterToKeyMap.forEach { (src, dst) -> mapObj.put(src, dst) }
+                put("clusterToKeyMap", mapObj)
+            }.toString(2)
+            File(rsignerDir, "signature_redistribution_map.json").writeText(redistMapJson)
+            File(dataDir, "signature_redistribution_map.json").writeText(redistMapJson)
+            File(WorkspaceManager.getSignerRSignerMappingsDir(context), "signature_redistribution_map.json").writeText(redistMapJson)
+
+            val gappsJson = JSONObject().apply {
+                put("totalPreserved", preservedGapps.size)
+                put("preservedPackages", JSONArray(preservedGapps))
+            }.toString(2)
+            File(rsignerDir, "gapps_preservation_manifest.json").writeText(gappsJson)
+            File(dataDir, "gapps_preservation_manifest.json").writeText(gappsJson)
+            File(WorkspaceManager.getSignerRSignerMappingsDir(context), "gapps_preservation_manifest.json").writeText(gappsJson)
+
+            File(rsignerDir, "mac_permissions.xml").writeText(updatedMacXml)
+            File(dataDir, "mac_permissions.xml").writeText(updatedMacXml)
+            File(WorkspaceManager.getSignerRSignerPermissionsDir(context), "mac_permissions.xml").writeText(updatedMacXml)
         } catch (_: Exception) {}
 
         onProgress("R-SIGNER : Resignature intégrale terminée avec succès !", 1.0f, foundApks.size, foundApks.size)
@@ -3448,30 +3525,73 @@ object GemeauSignerEngine {
         }
 
         var injected = false
-
-        // 1. Root loop mount injection
         val isRooted = try { RootChecker.checkRoot().isRooted } catch (_: Exception) { false }
+
+        // Step A: Detect if imageFile is an Android Sparse Image (simg: 0xED26FF3A)
+        var isSparse = false
+        try {
+            RandomAccessFile(imageFile, "r").use { raf ->
+                if (raf.length() >= 4) {
+                    val magicBytes = ByteArray(4)
+                    raf.readFully(magicBytes)
+                    val magicInt = ByteBuffer.wrap(magicBytes).order(ByteOrder.LITTLE_ENDIAN).int
+                    if (magicInt == 0xED26FF3A.toInt()) {
+                        isSparse = true
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+
+        // Step B: Privileged Loop Mount with short path bypass in /data/local/tmp (Root / Magisk / KernelSU)
         if (isRooted) {
+            val shortRawLink = "/data/local/tmp/rsigner_in.raw"
+            val tmpRawFile = File("/data/local/tmp/rsigner_raw.img")
+            val mntDir = "/data/local/tmp/rsigner_mnt"
+
             try {
-                onLog("[INJECTION ROOT] Montage en écriture de l'image de partition via loop...")
-                val mntDir = "/data/local/tmp/heph_inj_${System.currentTimeMillis()}"
+                onLog("[INJECTION ROOT] Préparation de l'image pour le montage noyau...")
+                val effectiveRawPath: String
+                if (isSparse) {
+                    onLog("[INJECTION ROOT] Image sparse détectée. Décompression préalable vers /data/local/tmp/...")
+                    val unsparseOk = UkaEngine.unsparseImage(imageFile, tmpRawFile)
+                    if (unsparseOk && tmpRawFile.exists() && tmpRawFile.length() > 0) {
+                        effectiveRawPath = tmpRawFile.absolutePath
+                    } else {
+                        effectiveRawPath = imageFile.absolutePath
+                    }
+                } else {
+                    onLog("[INJECTION ROOT] Copie locale vers /data/local/tmp pour contournement MediaProvider FUSE...")
+                    RootDelegator.executePrivilegedCommand("cp -f '${imageFile.absolutePath}' '${tmpRawFile.absolutePath}'") {}
+                    if (tmpRawFile.exists() && tmpRawFile.length() > 1024L) {
+                        effectiveRawPath = tmpRawFile.absolutePath
+                    } else {
+                        effectiveRawPath = imageFile.absolutePath
+                    }
+                }
+
+                // Create short link < 28 bytes to bypass 64-byte Android kernel loop restriction
+                RootDelegator.executePrivilegedCommand("rm -f $shortRawLink && ln -sf '$effectiveRawPath' $shortRawLink && chmod 777 $shortRawLink") {}
+
                 val scriptBuilder = StringBuilder()
                 scriptBuilder.append("mkdir -p '$mntDir'\n")
-                scriptBuilder.append("LOOP=\$(losetup -f --show '${imageFile.absolutePath}')\n")
+                scriptBuilder.append("LOOP=\$(losetup -f --show '$shortRawLink')\n")
                 scriptBuilder.append("if [ -n \"\$LOOP\" ]; then\n")
                 scriptBuilder.append("  mount -t ext4 -o rw \"\$LOOP\" '$mntDir' 2>/dev/null || mount -t f2fs -o rw \"\$LOOP\" '$mntDir' 2>/dev/null || mount -o rw \"\$LOOP\" '$mntDir' 2>/dev/null\n")
                 scriptBuilder.append("  if [ \$(ls '$mntDir' 2>/dev/null | wc -l) -gt 0 ]; then\n")
 
                 for (modFile in modifiedFiles) {
                     if (modFile.exists()) {
-                        val relPath = try {
-                            modFile.relativeTo(baseDir).path.replace("\\", "/")
-                        } catch (_: Exception) {
-                            modFile.name
+                        val fileName = modFile.name
+                        if (fileName.equals("mac_permissions.xml", ignoreCase = true)) {
+                            scriptBuilder.append("    find '$mntDir' -name 'mac_permissions.xml' -type f -exec cp -f '${modFile.absolutePath}' {} \\; 2>/dev/null\n")
+                            scriptBuilder.append("    find '$mntDir' -name 'mac_permissions.xml' -type f -exec chmod 644 {} \\; 2>/dev/null\n")
+                        } else {
+                            scriptBuilder.append("    TARGET_APK=\$(find '$mntDir' -name '$fileName' -type f | head -n 1)\n")
+                            scriptBuilder.append("    if [ -n \"\$TARGET_APK\" ]; then\n")
+                            scriptBuilder.append("      cp -f '${modFile.absolutePath}' \"\$TARGET_APK\"\n")
+                            scriptBuilder.append("      chmod 644 \"\$TARGET_APK\"\n")
+                            scriptBuilder.append("    fi\n")
                         }
-                        scriptBuilder.append("    mkdir -p \"\$(dirname '$mntDir/$relPath')\"\n")
-                        scriptBuilder.append("    cp -f '${modFile.absolutePath}' '$mntDir/$relPath'\n")
-                        scriptBuilder.append("    chmod 644 '$mntDir/$relPath'\n")
                     }
                 }
 
@@ -3489,16 +3609,26 @@ object GemeauSignerEngine {
                         ok = true
                     }
                 }
+
                 if (code == 0 && ok) {
-                    injected = true
-                    onLog("[INJECTION ROOT] ${modifiedFiles.size} fichier(s) (APKs resignés et mac_permissions.xml) injectés dans l'image système avec succès !")
+                    val rawSrc = if (tmpRawFile.exists() && tmpRawFile.length() > 1024L) tmpRawFile else File(effectiveRawPath)
+                    if (rawSrc.exists() && rawSrc.length() > 1024L) {
+                        onLog("[INJECTION ROOT] Rapatriement de l'image modifiée vers ${imageFile.name} (${UkaEngine.formatFileSize(rawSrc.length())})...")
+                        rawSrc.copyTo(imageFile, overwrite = true)
+                        injected = true
+                        onLog("[SUCCÈS INJECTION] ${modifiedFiles.size} fichier(s) (APKs resignés et mac_permissions.xml) injectés directement dans ${imageFile.name} !")
+                    }
                 }
             } catch (e: Exception) {
-                onLog("[INJECTION ROOT] Avertissement injection root: ${e.message}")
+                onLog("[INJECTION ROOT] Avertissement injection: ${e.message}")
+            } finally {
+                try {
+                    RootDelegator.executePrivilegedCommand("rm -f $shortRawLink /data/local/tmp/rsigner_raw.img") {}
+                } catch (_: Exception) {}
             }
         }
 
-        // 2. debugfs injection for ext4 images if debugfs is present
+        // Step C: debugfs fallback for ext4 images
         if (!injected) {
             val debugfsPath = listOf("/system/bin/debugfs", "/apex/com.android.runtime/bin/debugfs", "debugfs").firstOrNull {
                 try {
@@ -3531,6 +3661,71 @@ object GemeauSignerEngine {
                 } catch (e: Exception) {
                     onLog("[INJECTION DEBUGFS] ${e.message}")
                 }
+            }
+        }
+
+        // Step D: Direct binary sector replacement fallback in raw linear image
+        if (!injected && imageFile.exists() && imageFile.length() > 4096L && !isSparse) {
+            try {
+                onLog("[INJECTION SECTOR] Écriture binaire directe dans les blocs de l'image ${imageFile.name}...")
+                var directCount = 0
+                RandomAccessFile(imageFile, "rw").use { raf ->
+                    val fileLength = raf.length()
+                    for (modFile in modifiedFiles) {
+                        if (!modFile.exists() || modFile.length() < 30) continue
+                        val apkBytes = modFile.readBytes()
+                        val searchTarget = modFile.name.toByteArray(Charsets.US_ASCII)
+                        val bufSize = 2 * 1024 * 1024
+                        val buffer = ByteArray(bufSize)
+                        var searchOffset = 0L
+
+                        while (searchOffset < fileLength) {
+                            raf.seek(searchOffset)
+                            val bytesRead = raf.read(buffer)
+                            if (bytesRead <= 0) break
+
+                            for (i in 0 until bytesRead - searchTarget.size) {
+                                var match = true
+                                for (j in searchTarget.indices) {
+                                    if (buffer[i + j] != searchTarget[j]) {
+                                        match = false
+                                        break
+                                    }
+                                }
+                                if (match) {
+                                    val startPos = searchOffset + i
+                                    val backSearchLimit = maxOf(0L, startPos - 128)
+                                    raf.seek(backSearchLimit)
+                                    val backBytes = ByteArray((startPos - backSearchLimit + 4).toInt())
+                                    raf.readFully(backBytes)
+                                    var pkOffset = -1L
+                                    for (k in backBytes.size - 4 downTo 0) {
+                                        if (backBytes[k] == 0x50.toByte() && backBytes[k + 1] == 0x4b.toByte() &&
+                                            backBytes[k + 2] == 0x03.toByte() && backBytes[k + 3] == 0x04.toByte()
+                                        ) {
+                                            pkOffset = backSearchLimit + k
+                                            break
+                                        }
+                                    }
+                                    if (pkOffset >= 0) {
+                                        raf.seek(pkOffset)
+                                        raf.write(apkBytes)
+                                        directCount++
+                                        break
+                                    }
+                                }
+                            }
+                            if (directCount > 0) break
+                            searchOffset += bufSize - 1024
+                        }
+                    }
+                }
+                if (directCount > 0) {
+                    injected = true
+                    onLog("[INJECTION SECTOR] $directCount fichier(s) remplacés directement dans l'image brute !")
+                }
+            } catch (e: Exception) {
+                onLog("[INJECTION SECTOR] Info: ${e.message}")
             }
         }
 
