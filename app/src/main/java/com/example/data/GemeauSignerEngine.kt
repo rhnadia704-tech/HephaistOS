@@ -12,6 +12,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.BufferedOutputStream
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -405,38 +406,56 @@ object GemeauSignerEngine {
                     raf.seek(eocdOffset + 12)
                     val cdSize = java.lang.Integer.reverseBytes(raf.readInt()).toLong()
 
-                    raf.seek(0)
-                    val sec1 = ByteArray(cdOffset.toInt())
-                    raf.readFully(sec1)
-
-                    raf.seek(cdOffset)
-                    val sec3 = ByteArray(cdSize.toInt())
-                    raf.readFully(sec3)
-
-                    raf.seek(eocdOffset)
-                    val sec4 = ByteArray((fileLen - eocdOffset).toInt())
-                    raf.readFully(sec4)
-
                     val v2AndV3Block = computeApkSigningBlockV2AndV3(
-                        sec1 = sec1,
-                        sec3 = sec3,
-                        sec4 = sec4,
+                        raf = raf,
+                        sec1Offset = 0L,
+                        sec1Len = cdOffset,
+                        sec3Offset = cdOffset,
+                        sec3Len = cdSize,
+                        sec4Offset = eocdOffset,
+                        sec4Len = fileLen - eocdOffset,
                         privateKey = privateKey,
                         certificate = certificate
                     )
 
-                    // Write final output APK: Section 1 + APK Signing Block (V2 + V3) + Section 3 + Updated EOCD
+                    // Write final output APK in 4 MB streamed chunks: Section 1 + APK Signing Block (V2 + V3) + Section 3 + Updated EOCD
                     if (outputApk.exists()) outputApk.delete()
-                    FileOutputStream(outputApk).use { out ->
-                        out.write(sec1)
-                        out.write(v2AndV3Block)
-                        out.write(sec3)
+                    FileOutputStream(outputApk).use { fosOut ->
+                        BufferedOutputStream(fosOut, 4 * 1024 * 1024).use { bos ->
+                            val copyBuffer = ByteArray(4 * 1024 * 1024)
 
-                        // Update Central Directory offset in EOCD (offset +16)
-                        val updatedEocd = sec4.copyOf()
-                        val newCdOffset = (cdOffset + v2AndV3Block.size).toInt()
-                        ByteBuffer.wrap(updatedEocd).order(ByteOrder.LITTLE_ENDIAN).putInt(16, newCdOffset)
-                        out.write(updatedEocd)
+                            // 1. Stream Section 1 (0 .. cdOffset)
+                            raf.seek(0)
+                            var remSec1 = cdOffset
+                            while (remSec1 > 0) {
+                                val toRead = minOf(copyBuffer.size.toLong(), remSec1).toInt()
+                                raf.readFully(copyBuffer, 0, toRead)
+                                bos.write(copyBuffer, 0, toRead)
+                                remSec1 -= toRead
+                            }
+
+                            // 2. Write APK Signing Block (V2 + V3)
+                            bos.write(v2AndV3Block)
+
+                            // 3. Stream Section 3 (Central Directory: cdOffset .. cdOffset + cdSize)
+                            raf.seek(cdOffset)
+                            var remSec3 = cdSize
+                            while (remSec3 > 0) {
+                                val toRead = minOf(copyBuffer.size.toLong(), remSec3).toInt()
+                                raf.readFully(copyBuffer, 0, toRead)
+                                bos.write(copyBuffer, 0, toRead)
+                                remSec3 -= toRead
+                            }
+
+                            // 4. Update Central Directory offset in EOCD (offset +16) and write Section 4
+                            val sec4 = ByteArray((fileLen - eocdOffset).toInt())
+                            raf.seek(eocdOffset)
+                            raf.readFully(sec4)
+                            val newCdOffset = (cdOffset + v2AndV3Block.size).toInt()
+                            ByteBuffer.wrap(sec4).order(ByteOrder.LITTLE_ENDIAN).putInt(16, newCdOffset)
+                            bos.write(sec4)
+                            bos.flush()
+                        }
                     }
                 } else {
                     // Fallback to v1 temp if EOCD not found
@@ -454,26 +473,34 @@ object GemeauSignerEngine {
     }
 
     private fun computeApkSigningBlockV2AndV3(
-        sec1: ByteArray,
-        sec3: ByteArray,
-        sec4: ByteArray,
+        raf: RandomAccessFile,
+        sec1Offset: Long,
+        sec1Len: Long,
+        sec3Offset: Long,
+        sec3Len: Long,
+        sec4Offset: Long,
+        sec4Len: Long,
         privateKey: PrivateKey,
         certificate: X509Certificate
     ): ByteArray {
         val md = MessageDigest.getInstance("SHA-256")
 
-        fun digestSection(data: ByteArray): ByteArray {
+        // Stream and digest section in 1 MB chunks without high RAM allocation
+        fun digestSection(startOffset: Long, totalLength: Long): ByteArray {
             val chunkSize = 1048576
             val chunkDigests = mutableListOf<ByteArray>()
-            var offset = 0
-            while (offset < data.size) {
-                val len = minOf(chunkSize, data.size - offset)
+            val chunkBuf = ByteArray(chunkSize)
+            var remaining = totalLength
+            raf.seek(startOffset)
+            while (remaining > 0) {
+                val len = minOf(chunkSize.toLong(), remaining).toInt()
+                raf.readFully(chunkBuf, 0, len)
                 md.reset()
                 md.update(0x5a.toByte())
                 md.update(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(len).array())
-                md.update(data, offset, len)
+                md.update(chunkBuf, 0, len)
                 chunkDigests.add(md.digest())
-                offset += len
+                remaining -= len
             }
             md.reset()
             md.update(0x5a.toByte())
@@ -482,9 +509,9 @@ object GemeauSignerEngine {
             return md.digest()
         }
 
-        val d1 = digestSection(sec1)
-        val d3 = digestSection(sec3)
-        val d4 = digestSection(sec4)
+        val d1 = digestSection(sec1Offset, sec1Len)
+        val d3 = digestSection(sec3Offset, sec3Len)
+        val d4 = digestSection(sec4Offset, sec4Len)
 
         md.reset()
         md.update(0x5a.toByte())
@@ -494,17 +521,25 @@ object GemeauSignerEngine {
         md.update(d4)
         val finalContentDigest = md.digest()
 
-        // 1. Common digest & cert sequences
-        val digestEntry = ByteBuffer.allocate(4 + 4 + 32).order(ByteOrder.LITTLE_ENDIAN)
-            .putInt(0x0103) // SHA256withRSA
-            .putInt(32)
+        // 1. Digests sequence
+        // In AOSP ApkSigningBlockUtils:
+        // Each digest record in digests sequence is length-prefixed:
+        // [length-prefix] [uint32 algorithmId] [length-prefix of raw digest] [raw digest bytes]
+        val rawDigestLen = finalContentDigest.size // 32
+        val singleDigestRecordLen = 4 + 4 + rawDigestLen
+        val singleDigestBuffer = ByteBuffer.allocate(4 + singleDigestRecordLen).order(ByteOrder.LITTLE_ENDIAN)
+            .putInt(singleDigestRecordLen) // length-prefix for this record
+            .putInt(0x0103)               // signature algorithm ID (SHA256withRSA)
+            .putInt(rawDigestLen)         // length of digest
             .put(finalContentDigest)
             .array()
-        val digestsSeq = ByteBuffer.allocate(4 + digestEntry.size).order(ByteOrder.LITTLE_ENDIAN)
-            .putInt(digestEntry.size)
-            .put(digestEntry)
+
+        val digestsSeq = ByteBuffer.allocate(4 + singleDigestBuffer.size).order(ByteOrder.LITTLE_ENDIAN)
+            .putInt(singleDigestBuffer.size)
+            .put(singleDigestBuffer)
             .array()
 
+        // 2. Certificates sequence
         val certDer = certificate.encoded
         val certEntry = ByteBuffer.allocate(4 + certDer.size).order(ByteOrder.LITTLE_ENDIAN)
             .putInt(certDer.size)
@@ -515,8 +550,10 @@ object GemeauSignerEngine {
             .put(certEntry)
             .array()
 
+        // 3. Additional attributes (empty)
         val attrsSeq = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(0).array()
 
+        // 4. Public key (length-prefixed)
         val pubKeyBytes = certificate.publicKey.encoded
         val pubKeySeq = ByteBuffer.allocate(4 + pubKeyBytes.size).order(ByteOrder.LITTLE_ENDIAN)
             .putInt(pubKeyBytes.size)
@@ -538,14 +575,19 @@ object GemeauSignerEngine {
         signerV2.update(signedDataContentV2)
         val rawSignatureV2 = signerV2.sign()
 
-        val sigEntryV2 = ByteBuffer.allocate(4 + 4 + rawSignatureV2.size).order(ByteOrder.LITTLE_ENDIAN)
-            .putInt(0x0103)
-            .putInt(rawSignatureV2.size)
+        // In AOSP, each signature record in signatures sequence is length-prefixed:
+        // [length-prefix] [uint32 algorithmId] [length-prefix of raw signature] [raw signature bytes]
+        val singleSigRecordLenV2 = 4 + 4 + rawSignatureV2.size
+        val singleSigBufferV2 = ByteBuffer.allocate(4 + singleSigRecordLenV2).order(ByteOrder.LITTLE_ENDIAN)
+            .putInt(singleSigRecordLenV2)   // Length-prefix of this signature record
+            .putInt(0x0103)                 // Algorithm ID
+            .putInt(rawSignatureV2.size)    // Length of raw signature
             .put(rawSignatureV2)
             .array()
-        val sigsSeqV2 = ByteBuffer.allocate(4 + sigEntryV2.size).order(ByteOrder.LITTLE_ENDIAN)
-            .putInt(sigEntryV2.size)
-            .put(sigEntryV2)
+
+        val sigsSeqV2 = ByteBuffer.allocate(4 + singleSigBufferV2.size).order(ByteOrder.LITTLE_ENDIAN)
+            .putInt(singleSigBufferV2.size) // Total length of signatures sequence
+            .put(singleSigBufferV2)
             .array()
 
         val signerTotalV2 = signedDataV2.size + sigsSeqV2.size + pubKeySeq.size
@@ -569,8 +611,9 @@ object GemeauSignerEngine {
             .array()
 
         // ── V3 SIGNED DATA & SIGNER BLOCK (ID: 0xf05368c0) ──
-        // In v3, signedData contains: digests, certs, minSdkVersion (24), maxSdkVersion (0x7FFFFFFF), additionalAttributes
-        val minSdk = 24
+        // In v3 (Android 9+ / API 28+):
+        // signedData contains: digestsSeq, certsSeq, minSdk (28), maxSdk (0x7FFFFFFF), additionalAttributes
+        val minSdk = 28
         val maxSdk = Int.MAX_VALUE
         val signedDataTotalV3 = digestsSeq.size + certsSeq.size + 4 + 4 + attrsSeq.size
         val signedDataV3 = ByteBuffer.allocate(4 + signedDataTotalV3).order(ByteOrder.LITTLE_ENDIAN)
@@ -588,17 +631,28 @@ object GemeauSignerEngine {
         signerV3.update(signedDataContentV3)
         val rawSignatureV3 = signerV3.sign()
 
-        val sigEntryV3 = ByteBuffer.allocate(4 + 4 + rawSignatureV3.size).order(ByteOrder.LITTLE_ENDIAN)
-            .putInt(0x0103)
-            .putInt(rawSignatureV3.size)
+        // A single signature record in V3 signatures sequence is length-prefixed:
+        // [length-prefix] [uint32 algorithmId] [length-prefix of raw signature] [raw signature bytes]
+        // This eliminates the apktoolM "W: V3 - Malformed APK Signature Scheme v3 signature record #1" warning!
+        val singleSigRecordLenV3 = 4 + 4 + rawSignatureV3.size
+        val singleSigBufferV3 = ByteBuffer.allocate(4 + singleSigRecordLenV3).order(ByteOrder.LITTLE_ENDIAN)
+            .putInt(singleSigRecordLenV3)   // Length-prefix of this signature record
+            .putInt(0x0103)                 // Algorithm ID
+            .putInt(rawSignatureV3.size)    // Length of raw signature
             .put(rawSignatureV3)
             .array()
-        val sigsSeqV3 = ByteBuffer.allocate(4 + sigEntryV3.size).order(ByteOrder.LITTLE_ENDIAN)
-            .putInt(sigEntryV3.size)
-            .put(sigEntryV3)
+
+        val sigsSeqV3 = ByteBuffer.allocate(4 + singleSigBufferV3.size).order(ByteOrder.LITTLE_ENDIAN)
+            .putInt(singleSigBufferV3.size) // Total length of signatures sequence
+            .put(singleSigBufferV3)
             .array()
 
-        // V3 signer: signedData, minSdkVersion, maxSdkVersion, signatures, publicKey
+        // V3 signer block structure:
+        // [signedData (length-prefixed)]
+        // [minSdkVersion (uint32)]
+        // [maxSdkVersion (uint32)]
+        // [signatures (length-prefixed)]
+        // [publicKey (length-prefixed)]
         val signerTotalV3 = signedDataV3.size + 4 + 4 + sigsSeqV3.size + pubKeySeq.size
         val signerBlockV3 = ByteBuffer.allocate(4 + signerTotalV3).order(ByteOrder.LITTLE_ENDIAN)
             .putInt(signerTotalV3)
@@ -966,12 +1020,15 @@ object GemeauSignerEngine {
                         }
 
                         if (resignedCount <= 5 || resignedCount % 10 == 0 || resignedCount == foundApks.size) {
-                            onLog("[RESIGNATURE RÉELLE] ${apkEntry.zipPath} resigné avec succès (v1+v2, clé: $assignedKey)")
+                            onLog("[RESIGNATURE RÉELLE] ${apkEntry.zipPath} resigné avec succès (v1+v2+v3, clé: $assignedKey)")
                         }
                     }
                 } catch (e: Exception) {
                     onLog("[AVERTISSEMENT] Erreur signature réelle ${apkEntry.zipPath}: ${e.message}")
                 }
+            }
+            if (i % 5 == 0) {
+                System.gc() // Prevent memory exhaustion during large bulk GSI signing
             }
             onProgress("Signature système : ${apkEntry.zipPath}...", 0.60f + (0.20f * (i.toFloat() / foundApks.size.coerceAtLeast(1))), resignedCount, foundApks.size)
         }
@@ -1050,6 +1107,10 @@ object GemeauSignerEngine {
 
         val macPermissionsFile = File(extractedWorkDir, "mac_permissions.xml")
         macPermissionsFile.writeText(updatedMacXml)
+        try {
+            val patchedFile = File(WorkspaceManager.getSignerRSignerPermissionsDir(context), "mac_permissions_patched.xml")
+            patchedFile.writeText(updatedMacXml)
+        } catch (_: Exception) {}
         keyHexSignatures["platform"]?.let {
             onLog("[SELINUX] Signature Platform mise à jour : ${it.take(24)}... (seinfo=platform préservé)")
         }
@@ -1312,28 +1373,57 @@ object GemeauSignerEngine {
         }
         val gappsFile = File(dataDir, "gapps_preservation_manifest.json")
         gappsFile.writeText(gappsJson.toString(2))
+        try {
+            File(WorkspaceManager.getSignerRSignerMappingsDir(context), "gapps_preservation_manifest.json").writeText(gappsJson.toString(2))
+        } catch (_: Exception) {}
 
-        val securityAuditReport = File(dataDir, "security_audit_report.md")
-        securityAuditReport.writeText(buildString {
-            append("# Rapport d'Audit & Resignature Intégrale — HephaistOS GEMEAU\n\n")
-            append("- **ROM Source** : `${romFile.name}`\n")
-            append("- **Keyset Cible** : `${keysetDir.name}`\n")
-            append("- **Date** : ${SimpleDateFormat("dd MMMM yyyy HH:mm:ss", Locale.FRENCH).format(Date())}\n\n")
-            append("## 1. Préservation Intelligente des GApps\n")
-            append("Pour éviter tout dysfonctionnement des services Google (Play Integrity, SafetyNet, Play Store), les paquets suivants ont été **strictement exclus** de la resignature et conservent leurs signatures officielles certifiées :\n\n")
-            preservedGapps.forEach { append("- `$it`\n") }
-            append("\n## 2. Réplication 1:1 de la Chaîne de Confiance\n")
-            append("L'analyse a identifié ${keyClusters.size} grappes de clés distinctes. La structure relationnelle de l'OS source a été répliquée à l'identique avec le nouveau Keyset :\n\n")
+        val reportContent = buildString {
+            append("# Rapport d'Audit & Resignature Intégrale — HephaistOS GEMEAU R-SIGNER\n\n")
+            append("- **Cible** : `${romFile.name}`\n")
+            append("- **Keyset Utilisé** : `${keysetDir.name}`\n")
+            append("- **Date d'exécution** : ${SimpleDateFormat("dd MMMM yyyy HH:mm:ss", Locale.FRENCH).format(Date())}\n")
+            append("- **Total APKs traités** : ${foundApks.size}\n")
+            append("- **APKs resignés (V1+V2+V3)** : $resignedCount\n")
+            append("- **APKs GApps préservés** : ${preservedGapps.size}\n")
+            append("- **Grappes de signatures** : ${keyClusters.size}\n\n")
+            append("## 1. Préservation Intelligente des GApps (SafetyNet / Play Integrity)\n")
+            append("Pour garantir la conformité SafetyNet / Play Integrity, les paquets suivants sont **strictement préservés** sans altération de signature :\n\n")
+            preservedGapps.forEach { append("- `$it` (Signature officielle Google intacte)\n") }
+            append("\n## 2. Redistribution 1:1 des Clés AOSP\n")
+            append("La chaîne de confiance d'origine a été répliquée avec les clés générées :\n\n")
             clusterToKeyMap.forEach { (src, dst) ->
-                append("- Grappe `$src` ➔ Rôle `$dst` (${keysetDir.name})\n")
+                append("- Empreinte `$src` ➔ Rôle `$dst` (${keysetDir.name})\n")
             }
             append("\n## 3. Prévention des Bootloops & Caches d'Exécution\n")
-            append("- `mac_permissions.xml` : Signature de certificat Platform mise à jour (`seinfo=platform`).\n")
-            append("- Caches pré-optimisés : 42 fichiers `.odex`, `.vdex`, `.oat` purgés pour forcer une recompilation propre au boot.\n")
+            append("- `mac_permissions.xml` : Remplacement sécurisé des signatures Platform/Media/Shared avec préservation intégrale des balises `seinfo`.\n")
+            append("- ART / fs-verity : Synchronisation de $purgedArtifactsCount descripteur(s) et archive(s) dexopt.\n")
             if (withVbmeta) {
-                append("- **AVB 2.0** : Image `vbmeta.img` signée avec `avb.pk8` générée (flags disable-verity).\n")
+                append("- **AVB 2.0** : Image `vbmeta.img` générée et signée avec `avb.pk8` (flags 0x03 disable-verity).\n")
             }
-        })
+        }
+
+        val securityAuditReport = File(dataDir, "security_audit_report.md")
+        securityAuditReport.writeText(reportContent)
+        try {
+            File(WorkspaceManager.getSignerRSignerReportsDir(context), "rsigner_audit_report.md").writeText(reportContent)
+            File(WorkspaceManager.getSignerRSignerDir(context), "rsigner_audit_report.md").writeText(reportContent)
+        } catch (_: Exception) {}
+
+        val execManifestJson = JSONObject().apply {
+            put("targetFile", romFile.name)
+            put("status", "SUCCESS")
+            put("keyset", keysetDir.name)
+            put("timestamp", SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.FRENCH).format(Date()))
+            put("totalApks", foundApks.size)
+            put("resignedCount", resignedCount)
+            put("preservedGappsCount", preservedGapps.size)
+            put("withVbmeta", withVbmeta)
+            put("signedOutputPath", finalRomOutput.absolutePath)
+        }
+        try {
+            File(WorkspaceManager.getSignerRSignerReportsDir(context), "rsigner_execution_manifest.json").writeText(execManifestJson.toString(2))
+            File(WorkspaceManager.getSignerRSignerDir(context), "rsigner_execution_manifest.json").writeText(execManifestJson.toString(2))
+        } catch (_: Exception) {}
 
         onProgress("Resignature de la ROM terminée avec succès !", 1.0f, foundApks.size, foundApks.size)
         onLog("[SUCCÈS] Opération terminée avec succès. Rapports sauvegardés dans : ${dataDir.absolutePath}")
@@ -1387,6 +1477,30 @@ object GemeauSignerEngine {
             apks.addAll(extracted)
         } else {
             val unpackedDir = File(WorkspaceManager.getUnpackedDir(context), targetFile.nameWithoutExtension)
+            if (!unpackedDir.exists() || unpackedDir.listFiles().isNullOrEmpty()) {
+                if (targetFile.extension.equals("img", ignoreCase = true)) {
+                    onLog("[R-SIGNER] Image brute détectée (${targetFile.name}). Déballage automatique via UkaEngine...")
+                    onProgress("Déballage automatique de l'image ${targetFile.name}...", 0.05f)
+                    val meta = UkaEngine.analyzeTarget(targetFile)
+                    val partitions = if (meta.partitions.isNotEmpty()) meta.partitions.map { it.name } else listOf("system")
+                    val unpackRes = UkaEngine.executeUnpack(
+                        context = context,
+                        targetFile = targetFile,
+                        metadata = meta,
+                        selectedPartitions = partitions,
+                        onProgress = { step, p, msg ->
+                            onProgress("Déballage : $step", 0.05f + 0.15f * p)
+                            onLog(msg)
+                        }
+                    )
+                    unpackRes.onSuccess {
+                        onLog("[SUCCÈS DÉBALLAGE] Partition déballée avec succès dans UNPACKED/${targetFile.nameWithoutExtension}")
+                    }.onFailure { err ->
+                        onLog("[AVERTISSEMENT DÉBALLAGE] Échec du déballage automatique : ${err.message}. Poursuite avec extraction.")
+                    }
+                }
+            }
+
             if (unpackedDir.exists() && unpackedDir.isDirectory) {
                 onLog("[R-SIGNER] Dossier déballé correspondant identifié : UNPACKED/${unpackedDir.name}")
                 unpackedDir.walkTopDown().forEach { file ->
@@ -1394,7 +1508,8 @@ object GemeauSignerEngine {
                         apks.add(file)
                     }
                 }
-            } else {
+            }
+            if (apks.isEmpty()) {
                 val extracted = extractApksFromRom(targetFile, tempWorkDir, onProgress, onLog)
                 apks.addAll(extracted)
             }
@@ -1403,8 +1518,9 @@ object GemeauSignerEngine {
         onLog("[R-SIGNER] ${apks.size} paquet(s) système recensé(s) dans la cible.")
         onProgress("Analyse cryptographique (V1/V2/V3, certificats, empreintes)...", 0.35f)
 
-        // 2. Analyze signatures of every APK and build clusters
+        // 2. Analyze signatures of every APK and build clusters & full database
         val groupsMap = mutableMapOf<String, MutableList<Pair<File, com.example.model.ApkSignatureInfo>>>()
+        val allApkDetails = mutableListOf<com.example.model.ApkSignatureInfo>()
         val unsignedList = mutableListOf<SignatureGroupApkEntry>()
 
         for ((idx, apk) in apks.withIndex()) {
@@ -1414,6 +1530,8 @@ object GemeauSignerEngine {
                 apk.name
             }
             val info = AnalystEngine.inspectApkSignature(apk, relPath, SimpleDateFormat("d MMM yyyy", Locale.FRENCH))
+            allApkDetails.add(info)
+
             if (info.isSigned && info.certificates.isNotEmpty()) {
                 val cert = info.certificates.first()
                 val fp = cert.sha256Hex
@@ -1434,6 +1552,7 @@ object GemeauSignerEngine {
             if (idx % 10 == 0 || idx == apks.size - 1) {
                 val p = 0.35f + 0.45f * ((idx + 1).toFloat() / apks.size.coerceAtLeast(1))
                 onProgress("Vérification signature ${apk.name}...", p)
+                System.gc() // Prevent memory bloat during mass scanning
             }
         }
 
@@ -1500,10 +1619,71 @@ object GemeauSignerEngine {
             onLog("[GROUPE DÉTECTÉ] ${group.groupName} : ${group.apkCount} APK(s) • Schéma: ${group.schemesDisplay} • SHA256: ${group.sha256.take(23)}...")
         }
 
-        // 4. Save signatures_by_group.json in RSIGNER dir
+        // 4. Populate structured RSIGNER/Data directories (database, permissions, mappings, reports)
+        val dataDbDir = WorkspaceManager.getSignerRSignerDatabaseDir(context)
+        val dataPermsDir = WorkspaceManager.getSignerRSignerPermissionsDir(context)
+        val dataMappingsDir = WorkspaceManager.getSignerRSignerMappingsDir(context)
+        val dataReportsDir = WorkspaceManager.getSignerRSignerReportsDir(context)
+        val timestamp = SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.FRENCH).format(Date())
+
+        // 4A. Database: target_signatures_db.json
+        val fullDbJson = JSONObject().apply {
+            put("targetFile", targetFile.name)
+            put("analysisTimestamp", timestamp)
+            put("totalApks", apks.size)
+            put("totalGroups", signatureGroups.size)
+            put("totalSignedApks", apks.size - unsignedList.size)
+            put("totalUnsignedApks", unsignedList.size)
+            val pkgsArray = JSONArray()
+            allApkDetails.forEach { inf ->
+                pkgsArray.put(JSONObject().apply {
+                    put("fileName", inf.fileName)
+                    put("relativePath", inf.relativePath)
+                    put("fileSize", inf.fileSize)
+                    put("formattedSize", inf.formattedSize)
+                    put("isSigned", inf.isSigned)
+                    put("signatureSchemes", JSONArray(inf.signatureSchemes))
+                    put("schemesDisplay", inf.schemesDisplay)
+                    put("sharedUserId", inf.sharedUserId ?: "")
+                    val certsArr = JSONArray()
+                    inf.certificates.forEach { c ->
+                        certsArr.put(JSONObject().apply {
+                            put("certIndex", c.certIndex)
+                            put("certType", c.certType)
+                            put("certVersion", c.certVersion)
+                            put("serialNumber", c.serialNumber)
+                            put("subjectDn", c.subjectDn)
+                            put("issuerDn", c.issuerDn)
+                            put("isSelfSigned", c.isSelfSigned)
+                            put("validFrom", c.validFrom)
+                            put("validUntil", c.validUntil)
+                            put("sigAlgName", c.sigAlgName)
+                            put("hashCode", c.hashCodeHex)
+                            put("crc32", c.crc32Hex)
+                            put("md5", c.md5Hex)
+                            put("sha1", c.sha1Hex)
+                            put("sha224", c.sha224Hex)
+                            put("sha256", c.sha256Hex)
+                            put("sha384", c.sha384Hex)
+                            put("sha512", c.sha512Hex)
+                            put("publicKey", c.publicKeyString)
+                            put("sigBitsHex", c.signatureBytesHex)
+                            put("certBase64", c.certBase64)
+                        })
+                    }
+                    put("certificates", certsArr)
+                })
+            }
+            put("packages", pkgsArray)
+        }
+        val targetSignaturesDbFile = File(dataDbDir, "target_signatures_db.json")
+        targetSignaturesDbFile.writeText(fullDbJson.toString(2))
+        onLog("[BASE DE DONNÉES] Base complète exportée -> ${targetSignaturesDbFile.absolutePath}")
+
+        // 4B. Database: signatures_by_group.json
         val jsonReport = JSONObject().apply {
             put("targetFile", targetFile.name)
-            put("analysisTimestamp", SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.FRENCH).format(Date()))
+            put("analysisTimestamp", timestamp)
             put("totalApks", apks.size)
             put("totalGroups", signatureGroups.size)
             put("totalSignedApks", apks.size - unsignedList.size)
@@ -1546,11 +1726,121 @@ object GemeauSignerEngine {
             }
             put("unsignedApks", unsignedArray)
         }
-        val sigByGroupFile = File(rsignerDir, "signatures_by_group.json")
-        sigByGroupFile.writeText(jsonReport.toString(2))
-        onLog("[ANALYSE TERMINÉE] Rapport des signatures par groupe exporté -> ${sigByGroupFile.absolutePath}")
-        onProgress("Analyse de la cible terminée avec succès !", 1.0f)
+        val sigByGroupFileDb = File(dataDbDir, "signatures_by_group.json")
+        sigByGroupFileDb.writeText(jsonReport.toString(2))
+        val sigByGroupLegacy = File(rsignerDir, "signatures_by_group.json")
+        sigByGroupLegacy.writeText(jsonReport.toString(2))
+        onLog("[ANALYSE] Groupes de signatures exportés -> ${sigByGroupFileDb.absolutePath}")
 
+        // 4C. Permissions: Extract and backup permissions files
+        var extractedPermsCount = 0
+        fun checkAndCopyPermFile(source: File) {
+            val name = source.name.lowercase(Locale.ROOT)
+            if (name.contains("mac_permissions") || name.contains("privapp-permissions") || name.contains("default-permissions") || name.contains("otacerts")) {
+                val dest = File(dataPermsDir, source.name)
+                try {
+                    source.copyTo(dest, overwrite = true)
+                    extractedPermsCount++
+                } catch (_: Exception) {}
+            }
+        }
+        if (targetFile.isDirectory) {
+            targetFile.walkTopDown().forEach { checkAndCopyPermFile(it) }
+        } else {
+            val unpackedDir = File(WorkspaceManager.getUnpackedDir(context), targetFile.nameWithoutExtension)
+            if (unpackedDir.exists()) {
+                unpackedDir.walkTopDown().forEach { checkAndCopyPermFile(it) }
+            }
+        }
+        onLog("[PERMISSIONS] $extractedPermsCount fichier(s) de permissions/politiques extraits vers Data/permissions/")
+
+        // 4D. Mappings: signature_redistribution_map.json and gapps_preservation_manifest.json
+        val redistributionRules = JSONArray()
+        val gappsPreservedList = JSONArray()
+        signatureGroups.forEach { grp ->
+            val isGapp = grp.groupName.contains("Google", ignoreCase = true) || grp.groupName.contains("GApps", ignoreCase = true)
+            val assignedRole = when {
+                grp.groupName.contains("Platform", ignoreCase = true) -> "platform"
+                grp.groupName.contains("Media", ignoreCase = true) -> "media"
+                grp.groupName.contains("Shared", ignoreCase = true) -> "shared"
+                grp.groupName.contains("Network", ignoreCase = true) -> "networkstack"
+                isGapp -> "preserved_google"
+                else -> "releasekey"
+            }
+            redistributionRules.put(JSONObject().apply {
+                put("groupId", grp.groupId)
+                put("groupName", grp.groupName)
+                put("originalSha256", grp.sha256)
+                put("originalSubject", grp.subjectDn)
+                put("targetKeyRole", assignedRole)
+                put("isProtectedGapp", isGapp)
+                put("willBeResigned", !isGapp)
+                put("schemes", JSONArray(grp.schemes))
+                put("apkCount", grp.apkCount)
+            })
+            if (isGapp) {
+                grp.apks.forEach { a ->
+                    gappsPreservedList.put(JSONObject().apply {
+                        put("path", a.path)
+                        put("fileName", a.fileName)
+                        put("originalSha256", grp.sha256)
+                        put("policy", "Preserved 100% for SafetyNet / Play Integrity")
+                    })
+                }
+            }
+        }
+        val redistributionFile = File(dataMappingsDir, "signature_redistribution_map.json")
+        redistributionFile.writeText(JSONObject().apply {
+            put("targetFile", targetFile.name)
+            put("timestamp", timestamp)
+            put("rules", redistributionRules)
+        }.toString(2))
+
+        val gappsFile = File(dataMappingsDir, "gapps_preservation_manifest.json")
+        gappsFile.writeText(JSONObject().apply {
+            put("targetFile", targetFile.name)
+            put("totalPreserved", gappsPreservedList.length())
+            put("packages", gappsPreservedList)
+        }.toString(2))
+        onLog("[MAPPINGS] Tables de redistribution et manifeste GApps générés dans Data/mappings/")
+
+        // 4E. Reports: target_audit_deep_report.md
+        val auditReportMd = buildString {
+            append("# Rapport d'Audit Approfondi R-SIGNER : ${targetFile.name}\n\n")
+            append("- **Date de l'audit** : $timestamp\n")
+            append("- **Taille de la cible** : ${UkaEngine.formatFileSize(targetFile.length())}\n")
+            append("- **Total APKs analysés** : ${apks.size}\n")
+            append("- **Groupes de signatures identifiés** : ${signatureGroups.size}\n")
+            append("- **Applications non signées** : ${unsignedList.size}\n\n")
+            append("## 1. Groupes de Signatures Détectés\n\n")
+            append("| Groupe | Rôle Détecté | APKs | Schémas | Empreinte SHA-256 |\n")
+            append("|---|---|---|---|---|\n")
+            signatureGroups.forEach { g ->
+                append("| `${g.groupId}` | **${g.groupName}** | ${g.apkCount} | ${g.schemesDisplay} | `${g.sha256.take(24)}...` |\n")
+            }
+            append("\n## 2. Chaîne de Confiance & Cohérence Système\n\n")
+            append("- **SELinux MMAC** : ${if (extractedPermsCount > 0) "Fichiers de politique détectés et sauvegardés dans Data/permissions/" else "Non trouvé directement (vérifier montage partition)"}\n")
+            append("- **Préservation GApps** : ${gappsPreservedList.length()} application(s) protégée(s) conservée(s) sans altération.\n")
+            append("- **Schémas supportés** : Résignature V1 + V2 + V3 conforme AOSP pour tous les paquets système.\n\n")
+            append("## 3. Recommandations Anti-Bootloop\n\n")
+            append("1. Utiliser un trousseau 1:1 généré à partir de ces groupes pour garantir la correspondance des rôles.\n")
+            append("2. Conserver les paquets Google intacts pour préserver les attestations Play Integrity.\n")
+            append("3. Laisser R-SIGNER synchroniser les caches ART (.vdex/.odex) et mettre à jour `mac_permissions.xml`.\n")
+        }
+        val deepReportFile = File(dataReportsDir, "target_audit_deep_report.md")
+        deepReportFile.writeText(auditReportMd)
+
+        val execManifestFile = File(dataReportsDir, "rsigner_execution_manifest.json")
+        execManifestFile.writeText(JSONObject().apply {
+            put("targetFile", targetFile.name)
+            put("status", "ANALYSIS_COMPLETED")
+            put("timestamp", timestamp)
+            put("totalApks", apks.size)
+            put("totalGroups", signatureGroups.size)
+        }.toString(2))
+        onLog("[RAPPORTS] Rapport d'audit approfondi généré -> ${deepReportFile.absolutePath}")
+
+        onProgress("Analyse de la cible terminée avec succès !", 1.0f)
         signatureGroups
     }
 
@@ -1907,6 +2197,11 @@ object GemeauSignerEngine {
 
         val macPermissionsFile = File(rsignerDir, "mac_permissions.xml")
         macPermissionsFile.writeText(updatedMacXml)
+        try {
+            val permsDir = WorkspaceManager.getSignerRSignerPermissionsDir(context)
+            File(permsDir, "mac_permissions.xml").writeText(updatedMacXml)
+            File(permsDir, "mac_permissions_patched.xml").writeText(updatedMacXml)
+        } catch (_: Exception) {}
         onLog("[SELINUX] mac_permissions.xml mis à jour avec les signatures du nouveau trousseau.")
 
         // Update on disk if unpacked
@@ -1989,9 +2284,8 @@ object GemeauSignerEngine {
             onLog("[AVB 2.0] vbmeta.img généré dans RSIGNER/ -> ${vbmetaOutputFile.name} (Flags: 0x1)")
         }
 
-        // Reports export in RSIGNER dir
-        val auditReportFile = File(rsignerDir, "rsigner_audit_report.md")
-        auditReportFile.writeText(buildString {
+        // Reports export in RSIGNER and RSIGNER/Data/reports dir
+        val auditReportText = buildString {
             append("# Rapport de Resignature Complète — R-SIGNER (HephaistOS GÉMÉAU)\n\n")
             append("- **Cible Source** : `${targetFile.name}`\n")
             append("- **Trousseau Utilisé** : `${keysetDir.name}`\n")
@@ -2012,10 +2306,14 @@ object GemeauSignerEngine {
             if (withVbmeta) {
                 append("- `vbmeta.img` : Image AVB 2.0 générée avec clé `avb.pk8` et drapeaux disable-verity.\n")
             }
-        })
+        }
+        val auditReportFile = File(rsignerDir, "rsigner_audit_report.md")
+        auditReportFile.writeText(auditReportText)
+        try {
+            File(WorkspaceManager.getSignerRSignerReportsDir(context), "rsigner_audit_report.md").writeText(auditReportText)
+        } catch (_: Exception) {}
 
-        val manifestJsonFile = File(rsignerDir, "rsigner_execution_manifest.json")
-        manifestJsonFile.writeText(JSONObject().apply {
+        val manifestContent = JSONObject().apply {
             put("targetFile", targetFile.name)
             put("outputFile", finalRomOutput.name)
             put("outputPath", finalRomOutput.absolutePath)
@@ -2025,7 +2323,12 @@ object GemeauSignerEngine {
             put("withVbmeta", withVbmeta)
             put("outputDir", rsignerDir.absolutePath)
             put("reportPath", auditReportFile.absolutePath)
-        }.toString(2))
+        }.toString(2)
+        val manifestJsonFile = File(rsignerDir, "rsigner_execution_manifest.json")
+        manifestJsonFile.writeText(manifestContent)
+        try {
+            File(WorkspaceManager.getSignerRSignerReportsDir(context), "rsigner_execution_manifest.json").writeText(manifestContent)
+        } catch (_: Exception) {}
 
         onProgress("R-SIGNER : Resignature intégrale terminée avec succès !", 1.0f, foundApks.size, foundApks.size)
         onLog("=======================================================")

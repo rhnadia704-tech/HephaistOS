@@ -134,6 +134,36 @@ object WorkspaceManager {
         return dir
     }
 
+    fun getSignerRSignerDataDir(context: Context): File {
+        val dir = File(getSignerRSignerDir(context), "Data")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    fun getSignerRSignerDatabaseDir(context: Context): File {
+        val dir = File(getSignerRSignerDataDir(context), "database")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    fun getSignerRSignerPermissionsDir(context: Context): File {
+        val dir = File(getSignerRSignerDataDir(context), "permissions")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    fun getSignerRSignerMappingsDir(context: Context): File {
+        val dir = File(getSignerRSignerDataDir(context), "mappings")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    fun getSignerRSignerReportsDir(context: Context): File {
+        val dir = File(getSignerRSignerDataDir(context), "reports")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
     fun getToolsDir(context: Context): File {
         return getSubDir(context, "TOOLS")
     }

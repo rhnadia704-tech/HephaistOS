@@ -3,6 +3,7 @@ package com.example
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.GemeauSignerEngine
+import com.example.data.WorkspaceManager
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -315,6 +316,26 @@ class GemeauSignerEngineTest {
             assertTrue("Settings.apk must have V2 scheme", settingsVerif.hasV2Scheme)
             assertTrue("Settings.apk must have V3 scheme", settingsVerif.hasV3Scheme)
             assertEquals("Settings.apk fingerprint must match new platform key", newKeyset1to1.certFingerprints["platform"], settingsVerif.sha256Fingerprint)
+
+            // 8. Verify RSIGNER/Data modular sub-directories and rich outputs
+            val dataDbDir = WorkspaceManager.getSignerRSignerDatabaseDir(context)
+            val dataPermsDir = WorkspaceManager.getSignerRSignerPermissionsDir(context)
+            val dataMappingsDir = WorkspaceManager.getSignerRSignerMappingsDir(context)
+            val dataReportsDir = WorkspaceManager.getSignerRSignerReportsDir(context)
+
+            val dbJsonFile = File(dataDbDir, "target_signatures_db.json")
+            assertTrue("target_signatures_db.json must exist in Data/database/", dbJsonFile.exists())
+            val dbContent = dbJsonFile.readText()
+            assertTrue("Database must contain packages array", dbContent.contains("\"packages\""))
+            assertTrue("Database must record signature schemes", dbContent.contains("V1") && dbContent.contains("V2"))
+
+            assertTrue("signatures_by_group.json must exist in Data/database/", File(dataDbDir, "signatures_by_group.json").exists())
+            assertTrue("mac_permissions.xml must exist in Data/permissions/", File(dataPermsDir, "mac_permissions.xml").exists())
+            assertTrue("mac_permissions_patched.xml must exist in Data/permissions/", File(dataPermsDir, "mac_permissions_patched.xml").exists())
+            assertTrue("signature_redistribution_map.json must exist in Data/mappings/", File(dataMappingsDir, "signature_redistribution_map.json").exists())
+            assertTrue("gapps_preservation_manifest.json must exist in Data/mappings/", File(dataMappingsDir, "gapps_preservation_manifest.json").exists())
+            assertTrue("target_audit_deep_report.md must exist in Data/reports/", File(dataReportsDir, "target_audit_deep_report.md").exists())
+            assertTrue("rsigner_audit_report.md must exist in Data/reports/", File(dataReportsDir, "rsigner_audit_report.md").exists())
 
             // Clean up
             testTargetDir.deleteRecursively()
