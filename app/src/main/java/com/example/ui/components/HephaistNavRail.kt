@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Analytics
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material.icons.filled.VpnKey
@@ -39,6 +40,7 @@ import androidx.compose.material.icons.outlined.Analytics
 import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Memory
+import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.VerifiedUser
 import androidx.compose.material.icons.outlined.VpnKey
@@ -233,13 +235,13 @@ fun HephaistNavRail(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 NavRailItem(
-                    label = "VERISIN",
-                    selected = currentScreen == Screen.VERISIN && !isPlusDrawerOpen,
-                    selectedIcon = Icons.Filled.VerifiedUser,
-                    unselectedIcon = Icons.Outlined.VerifiedUser,
+                    label = "SCEAU",
+                    selected = (currentScreen == Screen.SCEAU || currentScreen == Screen.VERISIN) && !isPlusDrawerOpen,
+                    selectedIcon = Icons.Filled.Security,
+                    unselectedIcon = Icons.Outlined.Security,
                     isExpanded = isExpanded,
-                    testTag = "nav_verisin_button",
-                    onClick = { onScreenSelected(Screen.VERISIN) }
+                    testTag = "nav_sceau_button",
+                    onClick = { onScreenSelected(Screen.SCEAU) }
                 )
 
                 Spacer(modifier = Modifier.height(8.dp))

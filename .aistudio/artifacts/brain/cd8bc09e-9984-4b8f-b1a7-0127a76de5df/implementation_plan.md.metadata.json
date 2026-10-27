@@ -1,6 +1,6 @@
 {
-  "summary":  "Plan de conception et d'implémentation de la fonctionnalité visuelle VERISIN avec carte sur l'écran d'accueil, sélecteur de fichiers Android, interface d'inspection cryptographique complète et fiabilisation du terminal contre les chevrons et guillemets.",
-  "updatedAt":  "2026-10-27T10:48:11.409422499Z",
+  "summary":  "Plan architectural et ergonomique pour la création de la fonctionnalité maîtresse SCEAU, le déplacement élégant de VERISIN à l'intérieur, et l'intégration du moteur de génération cryptographique KEYCORE (Keymaker, Verisin Key et Verisin Clone).",
+  "updatedAt":  "2026-10-27T19:37:56.279354478Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

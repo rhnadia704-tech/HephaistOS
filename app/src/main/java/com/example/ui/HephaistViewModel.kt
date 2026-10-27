@@ -43,6 +43,7 @@ import com.example.model.KeysetInfo
 import com.example.model.RepackUiState
 import com.example.model.UnpackUiState
 import com.example.data.ExtensionManager
+import com.example.data.KeycoreEngine
 import com.example.data.VerisinEngine
 import com.example.model.AheAction
 import com.example.model.ApkVerificationDetail
@@ -52,6 +53,9 @@ import com.example.model.AheExtension
 import com.example.model.AheUiState
 import com.example.model.AnalystReportSummary
 import com.example.model.AnalystUiState
+import com.example.model.KeycoreTab
+import com.example.model.SceauSubScreen
+import com.example.model.SceauUiState
 import com.example.data.AnalystEngine
 import java.io.File
 import java.io.InputStream
@@ -91,6 +95,7 @@ data class HephaistUiState(
     val gemeauUiState: GemeauUiState = GemeauUiState(),
     val aheUiState: AheUiState = AheUiState(),
     val analystUiState: AnalystUiState = AnalystUiState(),
+    val sceauUiState: SceauUiState = SceauUiState(),
     val verisinSelectedPath: String = "",
     val isVerifyingVerisin: Boolean = false,
     val verisinResult: VerisinEngine.VerisinResult? = null,
@@ -2252,6 +2257,419 @@ class HephaistViewModel(application: Application) : AndroidViewModel(application
                         ) 
                     }
                     logTerminal("[ERREUR VERISIN] ${e.message}", isError = true)
+                }
+            }
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // SCEAU & KEYCORE Operations
+    // ─────────────────────────────────────────────────────────────────────────
+
+    fun setSceauSubScreen(sub: SceauSubScreen) {
+        _uiState.update { it.copy(sceauUiState = it.sceauUiState.copy(currentSubScreen = sub)) }
+    }
+
+    fun setKeycoreTab(tab: KeycoreTab) {
+        _uiState.update { 
+            it.copy(
+                sceauUiState = it.sceauUiState.copy(
+                    keycoreState = it.sceauUiState.keycoreState.copy(
+                        activeTab = tab,
+                        statusMessage = null,
+                        errorMessage = null
+                    )
+                )
+            ) 
+        }
+    }
+
+    fun setKeycoreApkPath(path: String) {
+        _uiState.update {
+            it.copy(
+                sceauUiState = it.sceauUiState.copy(
+                    keycoreState = it.sceauUiState.keycoreState.copy(
+                        selectedApkPath = path,
+                        errorMessage = null
+                    )
+                )
+            )
+        }
+    }
+
+    fun onKeycoreUriSelected(context: Context, uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val copiedFile = WorkspaceManager.copyUriToWorkspace(context, uri)
+            withContext(Dispatchers.Main) {
+                if (copiedFile != null && copiedFile.exists()) {
+                    setKeycoreApkPath(copiedFile.absolutePath)
+                    refreshVerisinApks(context)
+                    _uiState.update {
+                        it.copy(
+                            snackbarMessage = "APK importé pour KEYCORE : ${copiedFile.name}"
+                        )
+                    }
+                } else {
+                    setKeycoreApkPath(uri.toString())
+                }
+            }
+        }
+    }
+
+    fun analyzeApkForKeycore(context: Context, inputPath: String) {
+        val clean = WorkspaceManager.sanitizePath(inputPath)
+        if (clean.isBlank()) {
+            _uiState.update {
+                it.copy(
+                    sceauUiState = it.sceauUiState.copy(
+                        keycoreState = it.sceauUiState.keycoreState.copy(
+                            errorMessage = "Veuillez spécifier un APK à analyser"
+                        )
+                    )
+                )
+            }
+            return
+        }
+
+        val resolved = WorkspaceManager.resolveApkPath(context, clean)
+        if (resolved == null || !resolved.exists()) {
+            _uiState.update {
+                it.copy(
+                    sceauUiState = it.sceauUiState.copy(
+                        keycoreState = it.sceauUiState.keycoreState.copy(
+                            errorMessage = "Fichier APK introuvable : '$clean'"
+                        )
+                    )
+                )
+            }
+            return
+        }
+
+        _uiState.update {
+            it.copy(
+                sceauUiState = it.sceauUiState.copy(
+                    keycoreState = it.sceauUiState.keycoreState.copy(
+                        isAnalyzingApk = true,
+                        errorMessage = null,
+                        statusMessage = "Analyse Verisin en cours...",
+                        selectedApkPath = resolved.absolutePath
+                    )
+                )
+            )
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val analysis = KeycoreEngine.analyzeApkForTarget(context, resolved) { msg ->
+                    logTerminal(msg)
+                }
+                withContext(Dispatchers.Main) {
+                    _uiState.update {
+                        it.copy(
+                            sceauUiState = it.sceauUiState.copy(
+                                keycoreState = it.sceauUiState.keycoreState.copy(
+                                    isAnalyzingApk = false,
+                                    targetAnalysis = analysis,
+                                    statusMessage = "Analyse Verisin réussie pour ${resolved.name}"
+                                )
+                            ),
+                            snackbarMessage = "Structure cible analysée avec succès"
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    _uiState.update {
+                        it.copy(
+                            sceauUiState = it.sceauUiState.copy(
+                                keycoreState = it.sceauUiState.keycoreState.copy(
+                                    isAnalyzingApk = false,
+                                    errorMessage = "Échec de l'analyse : ${e.message}"
+                                )
+                            )
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun generateKeymakerKeyset(
+        context: Context,
+        name: String,
+        cn: String,
+        org: String,
+        country: String,
+        alg: String,
+        years: Int
+    ) {
+        _uiState.update {
+            it.copy(
+                sceauUiState = it.sceauUiState.copy(
+                    keycoreState = it.sceauUiState.keycoreState.copy(
+                        isGeneratingKey = true,
+                        errorMessage = null,
+                        statusMessage = "Génération du jeu de clés..."
+                    )
+                )
+            )
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val keyset = KeycoreEngine.generateStandardKeymakerKeyset(
+                    context = context,
+                    keysetName = name,
+                    commonName = cn,
+                    organization = org,
+                    countryCode = country,
+                    algorithm = alg,
+                    validityYears = years,
+                    onLog = { logTerminal(it) }
+                )
+                withContext(Dispatchers.Main) {
+                    refreshKeysets(context)
+                    _uiState.update {
+                        it.copy(
+                            sceauUiState = it.sceauUiState.copy(
+                                keycoreState = it.sceauUiState.keycoreState.copy(
+                                    isGeneratingKey = false,
+                                    lastGeneratedKeyset = keyset,
+                                    statusMessage = "Keyset '${keyset.name}' forgé avec succès !"
+                                )
+                            ),
+                            snackbarMessage = "Keyset '${keyset.name}' créé avec succès"
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    _uiState.update {
+                        it.copy(
+                            sceauUiState = it.sceauUiState.copy(
+                                keycoreState = it.sceauUiState.keycoreState.copy(
+                                    isGeneratingKey = false,
+                                    errorMessage = "Erreur de génération : ${e.message}"
+                                )
+                            )
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun generateVerisinKey(
+        context: Context,
+        name: String,
+        cn: String,
+        org: String,
+        country: String,
+        years: Int
+    ) {
+        val target = _uiState.value.sceauUiState.keycoreState.targetAnalysis
+        if (target == null) {
+            _uiState.update {
+                it.copy(
+                    sceauUiState = it.sceauUiState.copy(
+                        keycoreState = it.sceauUiState.keycoreState.copy(
+                            errorMessage = "Veuillez d'abord analyser un APK modèle"
+                        )
+                    )
+                )
+            }
+            return
+        }
+
+        _uiState.update {
+            it.copy(
+                sceauUiState = it.sceauUiState.copy(
+                    keycoreState = it.sceauUiState.keycoreState.copy(
+                        isGeneratingKey = true,
+                        errorMessage = null,
+                        statusMessage = "Forge de la clé Verisin Key..."
+                    )
+                )
+            )
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val keyset = KeycoreEngine.createVerisinKey(
+                    context = context,
+                    targetAnalysis = target,
+                    keysetName = name,
+                    commonName = cn,
+                    organization = org,
+                    countryCode = country,
+                    validityYears = years,
+                    onLog = { logTerminal(it) }
+                )
+                withContext(Dispatchers.Main) {
+                    refreshKeysets(context)
+                    _uiState.update {
+                        it.copy(
+                            sceauUiState = it.sceauUiState.copy(
+                                keycoreState = it.sceauUiState.keycoreState.copy(
+                                    isGeneratingKey = false,
+                                    lastGeneratedKeyset = keyset,
+                                    statusMessage = "Clé calquée '${keyset.name}' prête !"
+                                )
+                            ),
+                            snackbarMessage = "Clé calquée '${keyset.name}' créée"
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    _uiState.update {
+                        it.copy(
+                            sceauUiState = it.sceauUiState.copy(
+                                keycoreState = it.sceauUiState.keycoreState.copy(
+                                    isGeneratingKey = false,
+                                    errorMessage = "Échec : ${e.message}"
+                                )
+                            )
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun generateVerisinClone(context: Context, cloneName: String) {
+        val target = _uiState.value.sceauUiState.keycoreState.targetAnalysis
+        if (target == null) {
+            _uiState.update {
+                it.copy(
+                    sceauUiState = it.sceauUiState.copy(
+                        keycoreState = it.sceauUiState.keycoreState.copy(
+                            errorMessage = "Veuillez d'abord analyser un APK cible"
+                        )
+                    )
+                )
+            }
+            return
+        }
+
+        _uiState.update {
+            it.copy(
+                sceauUiState = it.sceauUiState.copy(
+                    keycoreState = it.sceauUiState.keycoreState.copy(
+                        isGeneratingKey = true,
+                        errorMessage = null,
+                        statusMessage = "Forge du Sceau Clone..."
+                    )
+                )
+            )
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val keyset = KeycoreEngine.createVerisinClone(
+                    context = context,
+                    targetAnalysis = target,
+                    cloneKeysetName = cloneName,
+                    onLog = { logTerminal(it) }
+                )
+                withContext(Dispatchers.Main) {
+                    refreshKeysets(context)
+                    _uiState.update {
+                        it.copy(
+                            sceauUiState = it.sceauUiState.copy(
+                                keycoreState = it.sceauUiState.keycoreState.copy(
+                                    isGeneratingKey = false,
+                                    lastGeneratedKeyset = keyset,
+                                    statusMessage = "Sceau Clone '${keyset.name}' forgé avec succès !"
+                                )
+                            ),
+                            snackbarMessage = "Sceau Clone '${keyset.name}' prêt"
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    _uiState.update {
+                        it.copy(
+                            sceauUiState = it.sceauUiState.copy(
+                                keycoreState = it.sceauUiState.keycoreState.copy(
+                                    isGeneratingKey = false,
+                                    errorMessage = "Échec de clonage : ${e.message}"
+                                )
+                            )
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun resignApkWithCloneKey(context: Context) {
+        val keycoreState = _uiState.value.sceauUiState.keycoreState
+        val target = keycoreState.targetAnalysis
+        val cloneKeyset = keycoreState.lastGeneratedKeyset
+        if (target == null || cloneKeyset == null) {
+            _uiState.update {
+                it.copy(
+                    sceauUiState = it.sceauUiState.copy(
+                        keycoreState = it.sceauUiState.keycoreState.copy(
+                            errorMessage = "APK cible ou Sceau Clone manquant"
+                        )
+                    )
+                )
+            }
+            return
+        }
+
+        val apkFile = File(target.apkPath)
+        val keysetDir = File(cloneKeyset.dirPath)
+
+        _uiState.update {
+            it.copy(
+                sceauUiState = it.sceauUiState.copy(
+                    keycoreState = it.sceauUiState.keycoreState.copy(
+                        isResigningApk = true,
+                        errorMessage = null,
+                        statusMessage = "Resignature de l'APK en cours..."
+                    )
+                )
+            )
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val resigned = KeycoreEngine.resignApkWithCloneKey(
+                    context = context,
+                    inputApk = apkFile,
+                    cloneKeysetDir = keysetDir,
+                    onLog = { logTerminal(it) }
+                )
+                withContext(Dispatchers.Main) {
+                    _uiState.update {
+                        it.copy(
+                            sceauUiState = it.sceauUiState.copy(
+                                keycoreState = it.sceauUiState.keycoreState.copy(
+                                    isResigningApk = false,
+                                    lastResignedApkPath = resigned?.absolutePath,
+                                    statusMessage = "APK résigné avec succès !"
+                                )
+                            ),
+                            snackbarMessage = "APK résigné : ${resigned?.name ?: ""}"
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    _uiState.update {
+                        it.copy(
+                            sceauUiState = it.sceauUiState.copy(
+                                keycoreState = it.sceauUiState.keycoreState.copy(
+                                    isResigningApk = false,
+                                    errorMessage = "Erreur de resignature : ${e.message}"
+                                )
+                            )
+                        )
+                    }
                 }
             }
         }

@@ -73,6 +73,8 @@ import com.example.ui.screens.AnalystScreen
 import com.example.ui.screens.ExtractorScreen
 import com.example.ui.screens.GemeauScreen
 import com.example.ui.screens.HomeScreen
+import com.example.model.SceauSubScreen
+import com.example.ui.screens.SceauScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.screens.TerminalScreen
 import com.example.ui.screens.UnpackRepackScreen
@@ -307,8 +309,13 @@ class MainActivity : ComponentActivity() {
                                                 onNavigateToAnalyst = {
                                                     viewModel.selectScreen(Screen.ANALYST)
                                                 },
+                                                onNavigateToSceau = {
+                                                    viewModel.setSceauSubScreen(SceauSubScreen.HUB)
+                                                    viewModel.selectScreen(Screen.SCEAU)
+                                                },
                                                 onNavigateToVerisin = {
-                                                    viewModel.selectScreen(Screen.VERISIN)
+                                                    viewModel.setSceauSubScreen(SceauSubScreen.VERISIN)
+                                                    viewModel.selectScreen(Screen.SCEAU)
                                                 },
                                                 onOpenExtension = { ext ->
                                                     viewModel.openAheExtension(ext)
@@ -469,30 +476,61 @@ class MainActivity : ComponentActivity() {
                                                 )
                                             }
 
-                                            Screen.VERISIN -> {
+                                            Screen.SCEAU, Screen.VERISIN -> {
                                                 LaunchedEffect(Unit) {
                                                     viewModel.refreshVerisinApks(context)
                                                 }
-                                                VerisinScreen(
-                                                    selectedPath = uiState.verisinSelectedPath,
-                                                    isVerifying = uiState.isVerifyingVerisin,
-                                                    result = uiState.verisinResult,
-                                                    errorMessage = uiState.verisinError,
-                                                    availableApks = uiState.verisinAvailableApks,
-                                                    onPathChanged = { path ->
+                                                SceauScreen(
+                                                    sceauState = uiState.sceauUiState,
+                                                    verisinSelectedPath = uiState.verisinSelectedPath,
+                                                    isVerifyingVerisin = uiState.isVerifyingVerisin,
+                                                    verisinResult = uiState.verisinResult,
+                                                    verisinErrorMessage = uiState.verisinError,
+                                                    verisinAvailableApks = uiState.verisinAvailableApks,
+                                                    onVerisinPathChanged = { path ->
                                                         viewModel.setVerisinPath(path)
                                                     },
-                                                    onUriSelected = { uri ->
+                                                    onVerisinUriSelected = { uri ->
                                                         viewModel.onVerisinUriSelected(context, uri)
                                                     },
-                                                    onVerify = { path ->
+                                                    onVerisinVerify = { path ->
                                                         viewModel.runVerisinVerification(context, path)
                                                     },
-                                                    onRefreshAvailableApks = {
+                                                    onVerisinRefreshApks = {
                                                         viewModel.refreshVerisinApks(context)
                                                     },
-                                                    onClearResult = {
+                                                    onVerisinClearResult = {
                                                         viewModel.clearVerisinResult()
+                                                    },
+                                                    onKeycoreSelectTab = { tab ->
+                                                        viewModel.setKeycoreTab(tab)
+                                                    },
+                                                    onKeycoreSelectApkPath = { path ->
+                                                        viewModel.setKeycoreApkPath(path)
+                                                    },
+                                                    onKeycoreUriSelected = { uri ->
+                                                        viewModel.onKeycoreUriSelected(context, uri)
+                                                    },
+                                                    onKeycoreAnalyzeApk = { path ->
+                                                        viewModel.analyzeApkForKeycore(context, path)
+                                                    },
+                                                    onKeycoreGenerateKeymaker = { name, cn, org, c, alg, y ->
+                                                        viewModel.generateKeymakerKeyset(context, name, cn, org, c, alg, y)
+                                                    },
+                                                    onKeycoreGenerateVerisinKey = { name, cn, org, c, y ->
+                                                        viewModel.generateVerisinKey(context, name, cn, org, c, y)
+                                                    },
+                                                    onKeycoreGenerateVerisinClone = { cloneName ->
+                                                        viewModel.generateVerisinClone(context, cloneName)
+                                                    },
+                                                    onKeycoreResignWithClone = {
+                                                        viewModel.resignApkWithCloneKey(context)
+                                                    },
+                                                    onKeycoreRefreshApks = {
+                                                        viewModel.refreshVerisinApks(context)
+                                                    },
+                                                    onNavigateSubScreen = { subScreen ->
+                                                        viewModel.setSceauSubScreen(subScreen)
                                                     },
                                                     onBackToHome = {
                                                         viewModel.selectScreen(Screen.HOME)

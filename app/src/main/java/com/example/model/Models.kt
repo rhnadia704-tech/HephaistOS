@@ -6,6 +6,7 @@ enum class Screen(val title: String) {
     EXTRACTOR("Extractor"),
     GEMEAU("Géméau"),
     ANALYST("Analyst"),
+    SCEAU("Sceau"),
     VERISIN("Verisin"),
     AHE_EXTENSION("Extension .ahe"),
     SETTINGS("Paramètres")
@@ -366,6 +367,49 @@ data class AheUiState(
     val logs: List<TerminalEntry> = emptyList(),
     val formValues: Map<String, String> = emptyMap(),
     val selectedTabId: String = ""
+)
+
+enum class SceauSubScreen {
+    HUB,
+    VERISIN,
+    KEYCORE
+}
+
+enum class KeycoreTab(val label: String, val subtitle: String) {
+    KEYMAKER("Keymaker", "Forge standard de clés"),
+    VERISIN_KEY("Verisin Key", "Clé calquée sur un APK"),
+    VERISIN_CLONE("Verisin Clone", "Signature parallèle & clone")
+}
+
+data class KeycoreTargetAnalysis(
+    val apkPath: String = "",
+    val apkName: String = "",
+    val schemesDisplay: String = "",
+    val keyType: String = "RSA",
+    val keySizeBits: Int = 2048,
+    val sigAlgName: String = "SHA256withRSA",
+    val subjectDn: String = "",
+    val issuerDn: String = "",
+    val validityYears: Int = 25,
+    val isSelfSigned: Boolean = true
+)
+
+data class KeycoreUiState(
+    val activeTab: KeycoreTab = KeycoreTab.KEYMAKER,
+    val selectedApkPath: String = "",
+    val isAnalyzingApk: Boolean = false,
+    val targetAnalysis: KeycoreTargetAnalysis? = null,
+    val isGeneratingKey: Boolean = false,
+    val isResigningApk: Boolean = false,
+    val statusMessage: String? = null,
+    val errorMessage: String? = null,
+    val lastGeneratedKeyset: KeysetInfo? = null,
+    val lastResignedApkPath: String? = null
+)
+
+data class SceauUiState(
+    val currentSubScreen: SceauSubScreen = SceauSubScreen.HUB,
+    val keycoreState: KeycoreUiState = KeycoreUiState()
 )
 
 

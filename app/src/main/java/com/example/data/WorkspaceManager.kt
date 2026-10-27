@@ -27,7 +27,8 @@ object WorkspaceManager {
         "SIGNER",
         "Extensions",
         "TOOLS",
-        "ANALYST"
+        "ANALYST",
+        "SCEAU"
     )
 
     fun getWorkspaceRoot(context: Context): File {
@@ -180,6 +181,24 @@ object WorkspaceManager {
 
     fun getVerisinDataDir(context: Context): File {
         val dir = File(getVerisinDir(context), "Data")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    fun getSceauDir(context: Context): File {
+        val dir = File(getWorkspaceRoot(context), "SCEAU")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    fun getKeycoreDir(context: Context): File {
+        val dir = File(getSceauDir(context), "KEYCORE")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    fun getKeycoreClonesDir(context: Context): File {
+        val dir = File(getKeycoreDir(context), "clones")
         if (!dir.exists()) dir.mkdirs()
         return dir
     }
