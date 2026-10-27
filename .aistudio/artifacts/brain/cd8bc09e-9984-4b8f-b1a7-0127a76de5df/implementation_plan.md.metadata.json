@@ -1,6 +1,6 @@
 {
-  "summary":  "Plan d'implémentation pour la résignature R-SIGNER de haute fidélité sans bootloop :\n- Correction structurelle du bloc APK Signature Scheme v3 (résolution de l'erreur V3_SIG_MALFORMED_SIGNATURE dans apktoolM).\n- Prévention totale des crashs mémoire (OOM) via streaming par blocs de 4 Mo et recyclage mémoire pour les gros paquets système et GSI.\n- Déballage automatique transparent des images brutes (GSI, .img) via UkaEngine.\n- Restructuration propre et enrichie de sdcard/HEPHAISTOS/SIGNER/RSIGNER/Data/ en 4 sous-dossiers (database, permissions, mappings, reports).\n- Cartographie 1:1 de redistribution des clés et préservation stricte de la cohérence système (sharedUserId, SELinux mac_permissions, GApps SafetyNet, ART/fs-verity) pour garantir l'absence de bootloop.",
-  "updatedAt":  "2026-10-26T07:23:59.818934279Z",
+  "summary":  "Implementation plan for VERISIN engine: a dedicated, modular cryptographic verification engine in HEPHAISTOS with terminal integration (verisin and verisin-help), exhaustive X.509 certificate and signature scheme analysis (V1, V2, V3, V3.1), and structured report storage.",
+  "updatedAt":  "2026-10-27T07:41:15.185168226Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

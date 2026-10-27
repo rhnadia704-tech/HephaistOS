@@ -42,6 +42,7 @@ import com.example.model.KeysetInfo
 import com.example.model.RepackUiState
 import com.example.model.UnpackUiState
 import com.example.data.ExtensionManager
+import com.example.data.VerisinEngine
 import com.example.model.AheAction
 import com.example.model.ApkVerificationDetail
 import com.example.model.GemeauVerifySubTab
@@ -553,12 +554,63 @@ class HephaistViewModel(application: Application) : AndroidViewModel(application
                 entries.add(TerminalEntry("  help                 - Affiche cette aide"))
                 entries.add(TerminalEntry("  status               - Statut complet du cerveau et de l'environnement"))
                 entries.add(TerminalEntry("  apps                 - Liste des addons et applications connectées"))
+                entries.add(TerminalEntry("  verisin <apk>        - Analyse et audit de signature approfondi (VERISIN)"))
+                entries.add(TerminalEntry("  verisin-help         - Aide et options du moteur VERISIN"))
                 entries.add(TerminalEntry("  kitchen tools        - Liste les outils de base kitchen intégrés"))
                 entries.add(TerminalEntry("  kitchen detect <f>   - Analyse et identifie le format d'un fichier"))
                 entries.add(TerminalEntry("  kitchen unpack <f>   - Extraction assistée (payload.bin ou img)"))
                 entries.add(TerminalEntry("  workspace            - Résumé du dossier /sdcard/HEPHAISTOS/"))
                 entries.add(TerminalEntry("  root                 - Diagnostic des privilèges SuperUtilisateur"))
                 entries.add(TerminalEntry("  clear                - Réinitialiser la console"))
+            }
+            "verisin-help" -> {
+                for (line in VerisinEngine.getHelpBanner()) {
+                    entries.add(TerminalEntry(line))
+                }
+            }
+            "verisin" -> {
+                val sub = if (parts.size > 1) parts[1].lowercase() else ""
+                if (parts.size == 1 || sub == "help" || sub == "--help" || sub == "-h" || sub == "-help") {
+                    for (line in VerisinEngine.getHelpBanner()) {
+                        entries.add(TerminalEntry(line))
+                    }
+                } else {
+                    val targetArg = if (sub == "verify" || sub == "-v") {
+                        if (parts.size > 2) cmd.substringAfter(parts[1]).trim() else ""
+                    } else {
+                        cmd.substringAfter(parts[0]).trim()
+                    }
+
+                    if (targetArg.isBlank()) {
+                        entries.add(TerminalEntry("[ERREUR VERISIN] Veuillez spécifier le chemin de l'APK à vérifier.", isError = true))
+                        entries.add(TerminalEntry("Usage : verisin <chemin_vers_apk> ou verisin verify <chemin_vers_apk>"))
+                        entries.add(TerminalEntry("Tapez 'verisin-help' pour l'aide complète."))
+                    } else {
+                        val resolvedFile = WorkspaceManager.resolveApkPath(getApplication(), targetArg)
+                        if (resolvedFile == null || !resolvedFile.exists()) {
+                            entries.add(TerminalEntry("[ERREUR VERISIN] Fichier APK introuvable : '$targetArg'", isError = true))
+                            entries.add(TerminalEntry("Astuce : Placez le fichier dans /sdcard/HEPHAISTOS/ ou saisissez son chemin complet."))
+                        } else {
+                            entries.add(TerminalEntry("[VERISIN] Lancement de l'audit cryptographique sur : ${resolvedFile.name}...", isSuccess = true))
+                            entries.add(TerminalEntry("Chemin cible résolu : ${resolvedFile.absolutePath}"))
+                            viewModelScope.launch(Dispatchers.IO) {
+                                val result = VerisinEngine.verifyApkFile(
+                                    context = getApplication(),
+                                    apkFile = resolvedFile,
+                                    onLog = { msg -> logTerminal(msg) }
+                                )
+                                withContext(Dispatchers.Main) {
+                                    for (line in result.rawReportText.lines()) {
+                                        logTerminal(line)
+                                    }
+                                    if (result.reportFile != null) {
+                                        logTerminal("[SUCCÈS VERISIN] Rapport sauvegardé dans : ${result.reportFile.absolutePath}", isSuccess = true)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
             "kitchen" -> {
                 val sub = if (parts.size > 1) parts[1].lowercase() else ""

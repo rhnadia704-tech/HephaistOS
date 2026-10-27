@@ -164,6 +164,71 @@ object WorkspaceManager {
         return dir
     }
 
+    fun getVerisinDir(context: Context): File {
+        val dir = File(getWorkspaceRoot(context), "VERISIN")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    fun getVerisinReportsDir(context: Context): File {
+        val dir = File(getVerisinDir(context), "reports")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    fun getVerisinDataDir(context: Context): File {
+        val dir = File(getVerisinDir(context), "Data")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    fun resolveApkPath(context: Context, inputPath: String): File? {
+        val clean = inputPath.trim().removeSurrounding("\"", "\"").removeSurrounding("'", "'")
+        if (clean.isBlank()) return null
+
+        // 1. Direct file check (absolute or relative to current process)
+        val direct = File(clean)
+        if (direct.exists() && direct.isFile) return direct
+
+        // 2. Relative to HEPHAISTOS root (/sdcard/HEPHAISTOS)
+        val rootDir = getWorkspaceRoot(context)
+        val inRoot = File(rootDir, clean)
+        if (inRoot.exists() && inRoot.isFile) return inRoot
+
+        // 3. Search in HEPHAISTOS specific subfolders
+        val candidateDirs = listOf(
+            getSignerRSignerDir(context),
+            getSignerSignedApksDir(context),
+            getUnpackedDir(context),
+            getSignerDir(context),
+            getSubDir(context, "APKs"),
+            getSubDir(context, "Extracted"),
+            rootDir
+        )
+        for (dir in candidateDirs) {
+            val candidate = File(dir, clean)
+            if (candidate.exists() && candidate.isFile) return candidate
+            val candidateApk = File(dir, if (clean.endsWith(".apk", ignoreCase = true)) clean else "$clean.apk")
+            if (candidateApk.exists() && candidateApk.isFile) return candidateApk
+        }
+
+        // 4. Recursive search by filename in HEPHAISTOS root
+        val fileNameOnly = clean.substringAfterLast("/").substringAfterLast("\\")
+        val foundInWorkspace = rootDir.walkTopDown().firstOrNull {
+            it.isFile && (it.name.equals(fileNameOnly, ignoreCase = true) || it.name.equals(if (fileNameOnly.endsWith(".apk", ignoreCase = true)) fileNameOnly else "$fileNameOnly.apk", ignoreCase = true))
+        }
+        if (foundInWorkspace != null) return foundInWorkspace
+
+        // 5. System APK paths fallback (e.g. /system_ext/priv-app/SystemUI/SystemUI.apk)
+        val systemRoots = listOf("/system", "/system_ext", "/product", "/vendor", "/apex")
+        for (sys in systemRoots) {
+            val sysFile = File(sys, clean.removePrefix("/"))
+            if (sysFile.exists() && sysFile.isFile) return sysFile
+        }
+
+        return null
+    }
+
     fun getToolsDir(context: Context): File {
         return getSubDir(context, "TOOLS")
     }
