@@ -6,6 +6,7 @@ enum class Screen(val title: String) {
     EXTRACTOR("Extractor"),
     GEMEAU("Géméau"),
     ANALYST("Analyst"),
+    VERISIN("Verisin"),
     AHE_EXTENSION("Extension .ahe"),
     SETTINGS("Paramètres")
 }

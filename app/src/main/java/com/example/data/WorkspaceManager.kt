@@ -1,7 +1,9 @@
 package com.example.data
 
 import android.content.Context
+import android.net.Uri
 import android.os.Environment
+import android.provider.OpenableColumns
 import com.example.model.KeysetInfo
 import java.io.File
 import java.io.FileOutputStream
@@ -182,8 +184,21 @@ object WorkspaceManager {
         return dir
     }
 
+    fun sanitizePath(input: String): String {
+        var clean = input.trim()
+        // Strip angle brackets <...> if present from command examples
+        if (clean.startsWith("<") && clean.endsWith(">") && clean.length >= 2) {
+            clean = clean.substring(1, clean.length - 1).trim()
+        }
+        // Strip double or single quotes
+        clean = clean.removeSurrounding("\"", "\"").removeSurrounding("'", "'").trim()
+        // Also remove any remaining unescaped < or > brackets
+        clean = clean.replace("<", "").replace(">", "").trim()
+        return clean
+    }
+
     fun resolveApkPath(context: Context, inputPath: String): File? {
-        val clean = inputPath.trim().removeSurrounding("\"", "\"").removeSurrounding("'", "'")
+        val clean = sanitizePath(inputPath)
         if (clean.isBlank()) return null
 
         // 1. Direct file check (absolute or relative to current process)
@@ -195,12 +210,33 @@ object WorkspaceManager {
         val inRoot = File(rootDir, clean)
         if (inRoot.exists() && inRoot.isFile) return inRoot
 
-        // 3. Search in HEPHAISTOS specific subfolders
+        // 3. Normalization for /sdcard/... and /storage/emulated/0/...
+        val externalStorage = Environment.getExternalStorageDirectory()
+        if (clean.startsWith("/storage/emulated/0/")) {
+            val rel = clean.removePrefix("/storage/emulated/0/")
+            val extFile = File(externalStorage, rel)
+            if (extFile.exists() && extFile.isFile) return extFile
+        }
+        if (clean.startsWith("/sdcard/")) {
+            val rel = clean.removePrefix("/sdcard/")
+            val extFile = File(externalStorage, rel)
+            if (extFile.exists() && extFile.isFile) return extFile
+        }
+        if (clean.startsWith("sdcard/")) {
+            val rel = clean.removePrefix("sdcard/")
+            val extFile = File(externalStorage, rel)
+            if (extFile.exists() && extFile.isFile) return extFile
+            val directSd = File("/sdcard", rel)
+            if (directSd.exists() && directSd.isFile) return directSd
+        }
+
+        // 4. Search in HEPHAISTOS specific subfolders
         val candidateDirs = listOf(
             getSignerRSignerDir(context),
             getSignerSignedApksDir(context),
             getUnpackedDir(context),
             getSignerDir(context),
+            File(getVerisinDir(context), "picked"),
             getSubDir(context, "APKs"),
             getSubDir(context, "Extracted"),
             rootDir
@@ -212,14 +248,14 @@ object WorkspaceManager {
             if (candidateApk.exists() && candidateApk.isFile) return candidateApk
         }
 
-        // 4. Recursive search by filename in HEPHAISTOS root
+        // 5. Recursive search by filename in HEPHAISTOS root
         val fileNameOnly = clean.substringAfterLast("/").substringAfterLast("\\")
         val foundInWorkspace = rootDir.walkTopDown().firstOrNull {
             it.isFile && (it.name.equals(fileNameOnly, ignoreCase = true) || it.name.equals(if (fileNameOnly.endsWith(".apk", ignoreCase = true)) fileNameOnly else "$fileNameOnly.apk", ignoreCase = true))
         }
         if (foundInWorkspace != null) return foundInWorkspace
 
-        // 5. System APK paths fallback (e.g. /system_ext/priv-app/SystemUI/SystemUI.apk)
+        // 6. System APK paths fallback (e.g. /system_ext/priv-app/SystemUI/SystemUI.apk)
         val systemRoots = listOf("/system", "/system_ext", "/product", "/vendor", "/apex")
         for (sys in systemRoots) {
             val sysFile = File(sys, clean.removePrefix("/"))
@@ -227,6 +263,64 @@ object WorkspaceManager {
         }
 
         return null
+    }
+
+    fun findWorkspaceApks(context: Context, maxLimit: Int = 20): List<File> {
+        val rootDir = getWorkspaceRoot(context)
+        if (!rootDir.exists()) return emptyList()
+        val results = mutableListOf<File>()
+        val searchDirs = listOf(
+            getSignerRSignerDir(context),
+            getSignerSignedApksDir(context),
+            getUnpackedDir(context),
+            getSignerDir(context),
+            File(getVerisinDir(context), "picked"),
+            getSubDir(context, "APKs"),
+            rootDir
+        )
+        for (dir in searchDirs) {
+            if (dir.exists()) {
+                dir.walkTopDown().maxDepth(5).filter { it.isFile && it.name.endsWith(".apk", ignoreCase = true) }.forEach { file ->
+                    if (!results.any { it.name.equals(file.name, ignoreCase = true) && it.length() == file.length() }) {
+                        results.add(file)
+                        if (results.size >= maxLimit) return results
+                    }
+                }
+            }
+        }
+        return results
+    }
+
+    fun copyUriToWorkspace(context: Context, uri: Uri): File? {
+        return try {
+            val fileName = queryFileName(context, uri) ?: "picked_${System.currentTimeMillis()}.apk"
+            val targetDir = File(getVerisinDir(context), "picked")
+            if (!targetDir.exists()) targetDir.mkdirs()
+            val targetFile = File(targetDir, fileName)
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                FileOutputStream(targetFile).use { output ->
+                    input.copyTo(output)
+                }
+            }
+            if (targetFile.exists() && targetFile.length() > 0) targetFile else null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun queryFileName(context: Context, uri: Uri): String? {
+        if (uri.scheme == "file") return uri.lastPathSegment
+        if (uri.scheme == "content") {
+            try {
+                context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                    val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (nameIndex != -1 && cursor.moveToFirst()) {
+                        return cursor.getString(nameIndex)
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+        return uri.lastPathSegment?.substringAfterLast("/")
     }
 
     fun getToolsDir(context: Context): File {

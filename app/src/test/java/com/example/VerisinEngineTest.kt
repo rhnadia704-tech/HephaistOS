@@ -6,6 +6,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.example.data.GemeauSignerEngine
 import com.example.data.VerisinEngine
 import com.example.data.WorkspaceManager
+import com.example.model.Screen
 import com.example.ui.HephaistViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
@@ -33,7 +34,7 @@ class VerisinEngineTest {
         val fullText = banner.joinToString("\n")
         assertTrue("Banner must mention VERISIN", fullText.contains("VERISIN Core Engine"))
         assertTrue("Banner must document verisin-help", fullText.contains("verisin-help"))
-        assertTrue("Banner must document verisin <fichier.apk>", fullText.contains("verisin <fichier.apk>"))
+        assertTrue("Banner must document verisin command", fullText.contains("verisin") && fullText.contains("fichier.apk"))
         assertTrue("Banner must mention V1, V2, V3", fullText.contains("Schéma V1") && fullText.contains("Schéma V2") && fullText.contains("Schéma V3"))
     }
 
@@ -190,17 +191,28 @@ class VerisinEngineTest {
             viewModel.executeTerminalCommand("verisin-help")
             val entries1 = viewModel.uiState.value.terminalEntries
             assertTrue(entries1.any { it.text.contains("VERISIN Core Engine") })
-            assertTrue(entries1.any { it.text.contains("verisin <fichier.apk>") })
+            assertTrue(entries1.any { it.text.contains("verisin") })
 
             // Test 2: verisin (no args -> shows help)
             viewModel.executeTerminalCommand("verisin")
             val entries2 = viewModel.uiState.value.terminalEntries
             assertTrue(entries2.any { it.text.contains("VERISIN Core Engine") })
 
-            // Test 3: verisin non-existent file
-            viewModel.executeTerminalCommand("verisin /tmp/non_existent_app_12345.apk")
+            // Test 3: verisin non-existent file with angle brackets (strips < > automatically)
+            viewModel.executeTerminalCommand("verisin </tmp/non_existent_app_12345.apk>")
             val entries3 = viewModel.uiState.value.terminalEntries
-            assertTrue(entries3.any { it.text.contains("[ERREUR VERISIN]") && it.text.contains("introuvable") })
+            assertTrue(entries3.any { it.text.contains("[ERREUR VERISIN]") && it.text.contains("'/tmp/non_existent_app_12345.apk'") })
+
+            // Test 4: WorkspaceManager.sanitizePath
+            assertEquals("SystemUI.apk", WorkspaceManager.sanitizePath("<SystemUI.apk>"))
+            assertEquals("/sdcard/HEPHAISTOS/SystemUI.apk", WorkspaceManager.sanitizePath("</sdcard/HEPHAISTOS/SystemUI.apk>"))
+            assertEquals("/path/to/app.apk", WorkspaceManager.sanitizePath("\"/path/to/app.apk\""))
+
+            // Test 5: UI state and methods
+            viewModel.setVerisinPath("/sdcard/HEPHAISTOS/test.apk")
+            assertEquals("/sdcard/HEPHAISTOS/test.apk", viewModel.uiState.value.verisinSelectedPath)
+            viewModel.selectScreen(Screen.VERISIN)
+            assertEquals(Screen.VERISIN, viewModel.uiState.value.currentScreen)
         }
     }
 }

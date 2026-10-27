@@ -33,12 +33,14 @@ import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material.icons.outlined.Analytics
 import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.VerifiedUser
 import androidx.compose.material.icons.outlined.VpnKey
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -226,6 +228,18 @@ fun HephaistNavRail(
                     isExpanded = isExpanded,
                     testTag = "nav_analyst_button",
                     onClick = { onScreenSelected(Screen.ANALYST) }
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                NavRailItem(
+                    label = "VERISIN",
+                    selected = currentScreen == Screen.VERISIN && !isPlusDrawerOpen,
+                    selectedIcon = Icons.Filled.VerifiedUser,
+                    unselectedIcon = Icons.Outlined.VerifiedUser,
+                    isExpanded = isExpanded,
+                    testTag = "nav_verisin_button",
+                    onClick = { onScreenSelected(Screen.VERISIN) }
                 )
 
                 Spacer(modifier = Modifier.height(8.dp))

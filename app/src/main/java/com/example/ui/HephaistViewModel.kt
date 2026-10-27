@@ -2,6 +2,7 @@ package com.example.ui
 
 import android.app.Application
 import android.content.Context
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.AddonRegistry
@@ -90,6 +91,11 @@ data class HephaistUiState(
     val gemeauUiState: GemeauUiState = GemeauUiState(),
     val aheUiState: AheUiState = AheUiState(),
     val analystUiState: AnalystUiState = AnalystUiState(),
+    val verisinSelectedPath: String = "",
+    val isVerifyingVerisin: Boolean = false,
+    val verisinResult: VerisinEngine.VerisinResult? = null,
+    val verisinError: String? = null,
+    val verisinAvailableApks: List<File> = emptyList(),
     val snackbarMessage: String? = null
 )
 
@@ -575,24 +581,27 @@ class HephaistViewModel(application: Application) : AndroidViewModel(application
                         entries.add(TerminalEntry(line))
                     }
                 } else {
-                    val targetArg = if (sub == "verify" || sub == "-v") {
+                    val rawArg = if (sub == "verify" || sub == "-v") {
                         if (parts.size > 2) cmd.substringAfter(parts[1]).trim() else ""
                     } else {
                         cmd.substringAfter(parts[0]).trim()
                     }
+                    val targetArg = WorkspaceManager.sanitizePath(rawArg)
 
                     if (targetArg.isBlank()) {
                         entries.add(TerminalEntry("[ERREUR VERISIN] Veuillez spécifier le chemin de l'APK à vérifier.", isError = true))
-                        entries.add(TerminalEntry("Usage : verisin <chemin_vers_apk> ou verisin verify <chemin_vers_apk>"))
+                        entries.add(TerminalEntry("Usage : verisin [chemin_apk] ou verisin verify [chemin_apk]"))
+                        entries.add(TerminalEntry("Exemple : verisin SystemUI.apk (ne pas taper de chevrons < >)"))
                         entries.add(TerminalEntry("Tapez 'verisin-help' pour l'aide complète."))
                     } else {
                         val resolvedFile = WorkspaceManager.resolveApkPath(getApplication(), targetArg)
                         if (resolvedFile == null || !resolvedFile.exists()) {
                             entries.add(TerminalEntry("[ERREUR VERISIN] Fichier APK introuvable : '$targetArg'", isError = true))
-                            entries.add(TerminalEntry("Astuce : Placez le fichier dans /sdcard/HEPHAISTOS/ ou saisissez son chemin complet."))
+                            entries.add(TerminalEntry("Astuce : Placez le fichier dans /sdcard/HEPHAISTOS/ ou saisissez son chemin complet (sans chevrons < >)."))
                         } else {
                             entries.add(TerminalEntry("[VERISIN] Lancement de l'audit cryptographique sur : ${resolvedFile.name}...", isSuccess = true))
                             entries.add(TerminalEntry("Chemin cible résolu : ${resolvedFile.absolutePath}"))
+                            _uiState.update { it.copy(verisinSelectedPath = resolvedFile.absolutePath, isVerifyingVerisin = true) }
                             viewModelScope.launch(Dispatchers.IO) {
                                 val result = VerisinEngine.verifyApkFile(
                                     context = getApplication(),
@@ -600,6 +609,7 @@ class HephaistViewModel(application: Application) : AndroidViewModel(application
                                     onLog = { msg -> logTerminal(msg) }
                                 )
                                 withContext(Dispatchers.Main) {
+                                    _uiState.update { it.copy(isVerifyingVerisin = false, verisinResult = result) }
                                     for (line in result.rawReportText.lines()) {
                                         logTerminal(line)
                                     }
@@ -2136,6 +2146,112 @@ class HephaistViewModel(application: Application) : AndroidViewModel(application
                             snackbarMessage = "Erreur ANALYST : ${e.message}"
                         )
                     }
+                }
+            }
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // VERISIN UI Operations
+    // ─────────────────────────────────────────────────────────────────────────
+
+    fun setVerisinPath(path: String) {
+        _uiState.update { it.copy(verisinSelectedPath = path, verisinError = null) }
+    }
+
+    fun clearVerisinResult() {
+        _uiState.update { it.copy(verisinResult = null, verisinError = null) }
+    }
+
+    fun refreshVerisinApks(context: Context) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val apks = WorkspaceManager.findWorkspaceApks(context)
+            withContext(Dispatchers.Main) {
+                _uiState.update { it.copy(verisinAvailableApks = apks) }
+            }
+        }
+    }
+
+    fun onVerisinUriSelected(context: Context, uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val copiedFile = WorkspaceManager.copyUriToWorkspace(context, uri)
+            withContext(Dispatchers.Main) {
+                if (copiedFile != null && copiedFile.exists()) {
+                    _uiState.update { 
+                        it.copy(
+                            verisinSelectedPath = copiedFile.absolutePath,
+                            verisinError = null,
+                            snackbarMessage = "APK importé : ${copiedFile.name}"
+                        ) 
+                    }
+                    refreshVerisinApks(context)
+                } else {
+                    _uiState.update { 
+                        it.copy(
+                            verisinSelectedPath = uri.toString(),
+                            verisinError = "Impossible d'importer le fichier sélectionné"
+                        ) 
+                    }
+                }
+            }
+        }
+    }
+
+    fun runVerisinVerification(context: Context, inputPath: String) {
+        val cleanPath = WorkspaceManager.sanitizePath(inputPath)
+        if (cleanPath.isBlank()) {
+            _uiState.update { it.copy(verisinError = "Veuillez sélectionner ou saisir le chemin d'un APK à vérifier.") }
+            return
+        }
+
+        val resolved = WorkspaceManager.resolveApkPath(context, cleanPath)
+        if (resolved == null || !resolved.exists()) {
+            _uiState.update { 
+                it.copy(
+                    verisinError = "Fichier introuvable : '$cleanPath'. Assurez-vous qu'il est dans /sdcard/HEPHAISTOS/ ou saisissez son chemin complet sans chevrons."
+                ) 
+            }
+            return
+        }
+
+        _uiState.update { 
+            it.copy(
+                isVerifyingVerisin = true,
+                verisinError = null,
+                verisinSelectedPath = resolved.absolutePath
+            ) 
+        }
+
+        logTerminal("[VERISIN] Début de l'analyse dans l'interface pour : ${resolved.name}", isSuccess = true)
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val result = VerisinEngine.verifyApkFile(
+                    context = context,
+                    apkFile = resolved,
+                    onLog = { msg -> logTerminal(msg) }
+                )
+                withContext(Dispatchers.Main) {
+                    _uiState.update { 
+                        it.copy(
+                            isVerifyingVerisin = false,
+                            verisinResult = result,
+                            snackbarMessage = "Analyse VERISIN terminée avec succès (${result.schemesDisplay})"
+                        ) 
+                    }
+                    if (result.reportFile != null) {
+                        logTerminal("[SUCCÈS VERISIN] Rapport exporté : ${result.reportFile.absolutePath}", isSuccess = true)
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    _uiState.update { 
+                        it.copy(
+                            isVerifyingVerisin = false,
+                            verisinError = "Échec de l'audit VERISIN : ${e.message}"
+                        ) 
+                    }
+                    logTerminal("[ERREUR VERISIN] ${e.message}", isError = true)
                 }
             }
         }

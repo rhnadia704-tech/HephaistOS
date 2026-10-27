@@ -1,71 +1,122 @@
-# Plan d'Implémentation — Moteur VERISIN dans HEPHAISTOS
+# Fonctionnalité Visuelle & Moteur de Vérification VERISIN
 
-## 1. Contexte & Objectifs
-Le projet vise à créer dans HEPHAISTOS un moteur cryptographique indépendant et évolutif nommé **VERISIN** (`VerisinEngine`).
-Conformément aux directives de l'utilisateur :
-- Aucun élément graphique supplémentaire n'est ajouté sur l'écran d'accueil ni dans GÉMEAU.
-- L'accès se fait exclusivement via le **Terminal HEPHAISTOS** avec les commandes `verisin`, `verisin-help`, `verisin <chemin>` et `verisin verify <chemin>`.
-- Le moteur fournit une analyse de signature d'APK ultra-détaillée et exhaustive (Schémas V1, V2, V3, V3.1, détails X.509 complets, hachages CRC32/MD5/SHA1/SHA224/SHA256/SHA384/SHA512, code de hachage signed/unsigned, Base64 du certificat, bits de signature bruts, clé publique OpenSSL avec modulus/exponent, Base64 de signature, extensions X.509 et cible interface/SDK).
-- Sauvegarde automatique des rapports dans `/sdcard/HEPHAISTOS/VERISIN/reports/` et résolution automatique des chemins relatifs dans les répertoires d'HephaistOS.
+Ce plan détaille la mise en place de la fonctionnalité visuelle **VERISIN** accessible directement depuis l'écran d'accueil d'HephaistOS, avec sélecteur de fichiers, déclencheur d'analyse et affichage approfondi des signatures, tout en renforçant l'interpréteur de commandes du terminal contre les erreurs de saisie (chevrons `<...>` et guillemets).
 
 ---
 
-## 2. Architecture & Composants
+## Décisions Clés & Retours Utilisateur
 
-### A. Nouveau Moteur : `VerisinEngine.kt` (`com.example.data`)
-- **Inspection de haut niveau des schémas de signature** :
-  - Détection V1 (JAR META-INF/*.SF + *.RSA/DSA/EC).
-  - Détection V2 (APK Signature Scheme v2, bloc `0x7109871a`).
-  - Détection V3 (APK Signature Scheme v3, bloc `0xf05368c0`).
-  - Détection V3.1 (APK Signature Scheme v3.1, bloc `0x1b93ad61`).
-  - Détection V4 (Fichier `.idsig` si présent).
-- **Extraction cryptographique X.509 approfondie** :
-  - Parsing de chaque certificat avec `java.security.cert.CertificateFactory`.
-  - Serial Number au format BigInteger décimal complet.
-  - Propriétaire (Subject DN) et Émetteur (Issuer DN) avec statut d'auto-signature.
-  - Validité temporelle formatée : `de d MMM yyyy à d MMM yyyy`.
-  - Algorithme de signature (ex: `SHA256withRSA`, `SHA1withRSA`, `ECDSAwithSHA256`).
-  - **Condensats et sommes de contrôle de sécurité** :
-    - Code de hachage Java (`hashCode` signé et non-signé hex/dec).
-    - CRC32 en hexadécimal et entier décimal non signé.
-    - MD5, SHA-1, SHA-224, SHA-256, SHA-384, SHA-512 en hexadécimal minuscules.
-  - **Représentations binaires complètes** :
-    - Base64 du certificat complet encodé en DER.
-    - Bits de signature bruts (hexadécimal continu).
-    - Clé publique au format OpenSSL (`OpenSSLRSAPublicKey{modulus=...,publicExponent=...}`).
-    - Base64 de signature (charge utile brute de signature signée par la clé privée).
-- **Inspection du Manifeste & Environnement Android** :
-  - Lecture des en-têtes Android : `Interface v16 (36)` ou SDK cible/min/compil.
-  - Package name, versionCode, versionName, sharedUserId.
-- **Rapports & Persistance** :
-  - Export texte formaté rigoureusement conforme à la structure demandée par l'utilisateur.
-  - Enregistrement dans `/sdcard/HEPHAISTOS/VERISIN/reports/<apk_name>_verisin_report.txt`.
-  - Export JSON détaillé dans `/sdcard/HEPHAISTOS/VERISIN/Data/<apk_name>_verisin.json`.
-
-### B. Gestion des Répertoires : `WorkspaceManager.kt`
-- Ajout de :
-  - `getVerisinDir(context)` -> `/sdcard/HEPHAISTOS/VERISIN/`
-  - `getVerisinReportsDir(context)` -> `/sdcard/HEPHAISTOS/VERISIN/reports/`
-  - `getVerisinDataDir(context)` -> `/sdcard/HEPHAISTOS/VERISIN/Data/`
-- Méthode de résolution intelligente de fichier :
-  - Recherche du fichier par chemin absolu.
-  - Si inexistant, recherche dans `UNPACKED/`, `SIGNER/`, `SIGNER/RSIGNER/`, `APKs/`, ou recherche récursive du nom de fichier dans l'espace de travail `/sdcard/HEPHAISTOS/`.
-
-### C. Intégration Terminal : `HephaistViewModel.kt`
-- Dans `executeTerminalCommand(input: String)` :
-  - Interception des commandes :
-    - `verisin` (sans argument) ou `verisin-help` ou `verisin --help` ou `verisin -h` :
-      Affiche la bannière VERISIN, la description du moteur, les commandes disponibles et les exemples d'utilisation.
-    - `verisin <chemin>` et `verisin verify <chemin>` :
-      Résout le chemin de l'APK, invoque `VerisinEngine.verifyApkFile`, affiche le rapport complet dans le terminal, et confirme la sauvegarde dans `/sdcard/HEPHAISTOS/VERISIN/reports/`.
-  - Mise à jour de la commande globale `help` pour référencer `verisin`.
+> [!IMPORTANT]
+> - **Emplacement dans l'interface** : Intégration sous la forme d'une carte rapide standard sur l'écran d'accueil (aux côtés d'Unpack/Repack, Extractor, Gemeau et Analyst) ouvrant l'écran dédié VERISIN, ainsi qu'une entrée directe dans le rail de navigation si nécessaire.
+> - **Consultation des résultats** : Fiche structurée avec onglets/cartes par certificat, condensats (MD5, SHA, CRC32), clé publique OpenSSL, bits bruts et bouton de copie rapide du rapport intégral.
+> - **Sélecteur de fichier APK** : Intégration d'un bouton ouvrant le gestionnaire de fichiers Android (Storage Access Framework) combiné à un champ de saisie directe et des puces d'accès rapide aux APKs détectés dans l'espace de travail `/sdcard/HEPHAISTOS/`.
+> - **Résolution du bug visualisé en capture** : Nettoyage automatique des caractères chevrons `<` et `>` saisis par l'utilisateur dans le terminal (`verisin <chemin.apk>`), éliminant l'erreur de fichier introuvable.
 
 ---
 
-## 3. Plan de Tests & Validation
-- **Tests Unitaires / Robolectric (`VerisinEngineTest.kt`)** :
-  - Test de vérification d'un APK signé en V1 + V2 + V3.
-  - Validation du format exact de sortie (hachages, OpenSSLRSAPublicKey, bits de signature, base64).
-  - Validation de l'aide et de l'interception des commandes `verisin` et `verisin-help`.
-- **Compilation finale** :
-  - Validation avec `gradle :app:testDebugUnitTest` et `compile_applet`.
+## 1. Vue d'Ensemble & Fonctionnalités
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                             ÉCRAN D'ACCUEIL                                 │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │ 🛡️ VERISIN — Signature Inspection                 [ Ouvrir ➔ ]        │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────┬──────────────────────────────────────┘
+                                       │ Clic sur Ouvrir
+                                       ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            ÉCRAN DÉDIÉ VERISIN                              │
+│                                                                             │
+│  ┌─ Saisie & Sélection APK ──────────────────────────────────────────────┐  │
+│  │  [ Chemin de l'APK...                                ] [ 📁 Parcourir ]│  │
+│  │  Puces rapides : [ SystemUI.apk ] [ framework-res.apk ] [ ... ]        │  │
+│  │  [ 🛡️ VÉRIFIER AVEC VERISIN ]                                          │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+│                                                                             │
+│  ┌─ Résultats de l'Analyse Cryptographique ──────────────────────────────┐  │
+│  │  Badge : Schéma V1 + V2 + V3 (Valide)                                 │  │
+│  │  [ Certificat №1 ] [ Condensats & Hashes ] [ Clé Publique & Base64 ]  │  │
+│  │  - Numéro de série : 164328817835266820093013058790104210090404248394  │  │
+│  │  - Propriétaire / Émetteur / Validité                                 │  │
+│  │  - SHA-256, CRC32, MD5, SHA-512... avec boutons Copier                │  │
+│  │  - Clé OpenSSLRSAPublicKey { modulus, publicExponent }                │  │
+│  │  - Fichiers générés : /sdcard/HEPHAISTOS/VERISIN/reports/...          │  │
+│  │  [ 📋 Copier tout le rapport ] [ 📂 Ouvrir le fichier rapport ]        │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+1. **Carte d'accès rapide sur l'accueil (`HomeScreen.kt`)** :
+   - Design rigoureusement aligné sur les autres fonctionnalités (`UnpackRepackQuickCard`, `ExtractorQuickCard`, etc.).
+   - Titre, description claire, icône de sécurité et bouton d'action `Ouvrir ➔`.
+2. **Écran complet VERISIN (`VerisinScreen.kt`)** :
+   - Champ de texte modifiable pour le chemin du fichier APK.
+   - Bouton d'ouverture du gestionnaire de fichiers système (`ActivityResultContracts.GetContent()`).
+   - Puces de raccourci listant les APKs trouvés dans `/sdcard/HEPHAISTOS/` (notamment `SIGNER/RSIGNER/`, `UNPACKED/`, etc.).
+   - Bouton de lancement de la vérification avec retour visuel animé et gestion des erreurs explicite.
+   - Restitution exhaustive identique aux spécifications du terminal :
+     - Interface Android et chemin complet.
+     - Schémas détectés (V1, V2, V3, V3.1, V4).
+     - Détails X.509 (Série décimal, Sujet, Émetteur, Validité, Algorithme).
+     - Condensats (Code de hachage signé/non-signé, CRC32 décimal/hex, MD5, SHA-1, SHA-224, SHA-256, SHA-384, SHA-512).
+     - Données de signature (Base64 certificat, Bits bruts en hexadécimal, Clé publique `OpenSSLRSAPublicKey`, Base64 de signature).
+3. **Correctif du Terminal (`HephaistViewModel.kt` & `WorkspaceManager.kt`)** :
+   - Filtrage et assainissement automatique des chaînes de commande terminal : suppression des `<` et `>`, des guillemets doubles et simples entourant le chemin.
+   - Résolution fiable même si l'utilisateur saisit `verisin <SystemUI.apk>` ou `verisin <sdcard/HEPHAISTOS/SIGNER/RSIGNER/SystemUI.apk>`.
+
+---
+
+## 2. Expérience Utilisateur & Design Visuel
+
+- **Palette & Thème Material 3** :
+  - Teinte primaire d'HephaistOS avec accent de sécurité (tons bleu cybernétique / émeraude de validation).
+  - Cartes avec surélévation tonale et coins arrondis standardisés (16.dp).
+- **Interactions fluides** :
+  - Sélection d'un APK via le gestionnaire de fichiers qui remplit instantanément le champ et active le bouton de vérification.
+  - Copie instantanée de n'importe quel hachage (ex. SHA-256) ou du rapport complet d'un simple toucher avec confirmation haptique/Snackbar.
+  - Sauvegarde persistante du rapport dans `/sdcard/HEPHAISTOS/VERISIN/reports/<apk>_verisin.txt` et dans `Data/<apk>_verisin.json`.
+
+---
+
+## 3. Architecture Technique & Modifications
+
+```
+┌────────────────────────────────────────────────────────┐
+│                    HephaistOS UI                       │
+│  ┌───────────────────────┐  ┌───────────────────────┐  │
+│  │      HomeScreen       │  │     VerisinScreen     │  │
+│  │ (VerisinQuickCard)    │  │ (Picker + Résultat)   │  │
+│  └───────────┬───────────┘  └───────────┬───────────┘  │
+└──────────────┼──────────────────────────┼──────────────┘
+               │                          │
+               ▼                          ▼
+┌────────────────────────────────────────────────────────┐
+│                   HephaistViewModel                    │
+│  - currentScreen: Screen.Verisin                       │
+│  - verisinSelectedPath, verisinResult, isVerifying     │
+│  - executeTerminalCommand (sanitization <...> & "...") │
+└──────────────┬──────────────────────────┬──────────────┘
+               │                          │
+               ▼                          ▼
+┌──────────────────────────┐  ┌──────────────────────────┐
+│     WorkspaceManager     │  │      VerisinEngine       │
+│  - resolveApkPath        │  │  - verifyApkFile         │
+│  - sanitizePath          │  │  - formatReport          │
+│  - listAvailableApks     │  │  - saveReports           │
+└──────────────────────────┘  └──────────────────────────┘
+```
+
+1. **`Screen.kt`** :
+   - Ajout de `data object Verisin : Screen("verisin")`.
+2. **`WorkspaceManager.kt`** :
+   - Amélioration de `resolveApkPath` avec assainissement systématique (`cleanPath = rawPath.trim().removeSurrounding("<", ">").removeSurrounding("\"", "\"").trim()`).
+   - Ajout d'une méthode `findWorkspaceApks(context: Context): List<File>` pour proposer des suggestions rapides d'APKs déjà présents dans l'espace HephaistOS.
+3. **`VerisinScreen.kt`** :
+   - Nouvelle interface composable Material 3 pour l'inspection de signature avec champ de fichier, bouton sélecteur SAF, bouton d'exécution et accordéons/onglets de résultats.
+4. **`HomeScreen.kt`** :
+   - Ajout du composable `VerisinQuickCard` dans la liste verticale principale.
+5. **`MainActivity.kt`** :
+   - Gestion de la navigation vers `Screen.Verisin` avec gestion du retour arrière (`BackHandler`).
+6. **Tests & Validation** :
+   - Tests unitaires Robolectric validant le parsing assaini dans le terminal, la résolution de chemin avec chevrons et le bon déroulement de l'analyse.

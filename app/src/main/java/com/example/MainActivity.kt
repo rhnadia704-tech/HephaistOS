@@ -76,6 +76,7 @@ import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.screens.TerminalScreen
 import com.example.ui.screens.UnpackRepackScreen
+import com.example.ui.screens.VerisinScreen
 import com.example.ui.theme.HephaistOSTheme
 
 class MainActivity : ComponentActivity() {
@@ -306,6 +307,9 @@ class MainActivity : ComponentActivity() {
                                                 onNavigateToAnalyst = {
                                                     viewModel.selectScreen(Screen.ANALYST)
                                                 },
+                                                onNavigateToVerisin = {
+                                                    viewModel.selectScreen(Screen.VERISIN)
+                                                },
                                                 onOpenExtension = { ext ->
                                                     viewModel.openAheExtension(ext)
                                                 },
@@ -458,6 +462,37 @@ class MainActivity : ComponentActivity() {
                                                     },
                                                     onLaunchAnalysis = {
                                                         viewModel.runAnalystScan(context)
+                                                    },
+                                                    onBackToHome = {
+                                                        viewModel.selectScreen(Screen.HOME)
+                                                    }
+                                                )
+                                            }
+
+                                            Screen.VERISIN -> {
+                                                LaunchedEffect(Unit) {
+                                                    viewModel.refreshVerisinApks(context)
+                                                }
+                                                VerisinScreen(
+                                                    selectedPath = uiState.verisinSelectedPath,
+                                                    isVerifying = uiState.isVerifyingVerisin,
+                                                    result = uiState.verisinResult,
+                                                    errorMessage = uiState.verisinError,
+                                                    availableApks = uiState.verisinAvailableApks,
+                                                    onPathChanged = { path ->
+                                                        viewModel.setVerisinPath(path)
+                                                    },
+                                                    onUriSelected = { uri ->
+                                                        viewModel.onVerisinUriSelected(context, uri)
+                                                    },
+                                                    onVerify = { path ->
+                                                        viewModel.runVerisinVerification(context, path)
+                                                    },
+                                                    onRefreshAvailableApks = {
+                                                        viewModel.refreshVerisinApks(context)
+                                                    },
+                                                    onClearResult = {
+                                                        viewModel.clearVerisinResult()
                                                     },
                                                     onBackToHome = {
                                                         viewModel.selectScreen(Screen.HOME)
