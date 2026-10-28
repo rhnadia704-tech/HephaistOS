@@ -29,6 +29,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Analytics
+import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Memory
@@ -37,6 +38,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material.icons.outlined.Analytics
+import androidx.compose.material.icons.outlined.AutoFixHigh
 import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Memory
@@ -242,6 +244,18 @@ fun HephaistNavRail(
                     isExpanded = isExpanded,
                     testTag = "nav_sceau_button",
                     onClick = { onScreenSelected(Screen.SCEAU) }
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                NavRailItem(
+                    label = "Signalab",
+                    selected = currentScreen == Screen.SIGNALAB && !isPlusDrawerOpen,
+                    selectedIcon = Icons.Filled.AutoFixHigh,
+                    unselectedIcon = Icons.Outlined.AutoFixHigh,
+                    isExpanded = isExpanded,
+                    testTag = "nav_signalab_button",
+                    onClick = { onScreenSelected(Screen.SIGNALAB) }
                 )
 
                 Spacer(modifier = Modifier.height(8.dp))

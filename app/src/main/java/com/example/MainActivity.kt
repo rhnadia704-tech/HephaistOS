@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.net.Uri
 import android.os.Build
+import java.io.File
 import android.os.Bundle
 import android.os.Environment
 import android.provider.Settings
@@ -76,6 +77,7 @@ import com.example.ui.screens.HomeScreen
 import com.example.model.SceauSubScreen
 import com.example.ui.screens.SceauScreen
 import com.example.ui.screens.SettingsScreen
+import com.example.ui.screens.SignalabScreen
 import com.example.ui.screens.TerminalScreen
 import com.example.ui.screens.UnpackRepackScreen
 import com.example.ui.screens.VerisinScreen
@@ -313,6 +315,9 @@ class MainActivity : ComponentActivity() {
                                                     viewModel.setSceauSubScreen(SceauSubScreen.HUB)
                                                     viewModel.selectScreen(Screen.SCEAU)
                                                 },
+                                                onNavigateToSignalab = {
+                                                    viewModel.selectScreen(Screen.SIGNALAB)
+                                                },
                                                 onNavigateToVerisin = {
                                                     viewModel.setSceauSubScreen(SceauSubScreen.VERISIN)
                                                     viewModel.selectScreen(Screen.SCEAU)
@@ -531,6 +536,57 @@ class MainActivity : ComponentActivity() {
                                                     },
                                                     onNavigateSubScreen = { subScreen ->
                                                         viewModel.setSceauSubScreen(subScreen)
+                                                    },
+                                                    onBackToHome = {
+                                                        viewModel.selectScreen(Screen.HOME)
+                                                    }
+                                                )
+                                            }
+
+                                            Screen.SIGNALAB -> {
+                                                LaunchedEffect(Unit) {
+                                                    viewModel.refreshVerisinApks(context)
+                                                }
+                                                val availableFiles: List<File> = remember(uiState.verisinAvailableApks) {
+                                                    val list = mutableListOf<File>()
+                                                    list.addAll(uiState.verisinAvailableApks)
+                                                    val root: File = com.example.data.WorkspaceManager.getWorkspaceRoot(context)
+                                                    val files = root.listFiles()
+                                                    if (files != null) {
+                                                        for (f in files) {
+                                                            if (f.isFile && (f.extension in listOf("img", "zip", "bin", "erofs", "ext4"))) {
+                                                                list.add(f)
+                                                            }
+                                                        }
+                                                    }
+                                                    list.distinctBy { it.absolutePath }
+                                                }
+                                                SignalabScreen(
+                                                    uiState = uiState.signalabUiState,
+                                                    availableFiles = availableFiles,
+                                                    onSelectFilePath = { path ->
+                                                        viewModel.setSignalabFilePath(path)
+                                                    },
+                                                    onUriSelected = { uri ->
+                                                        viewModel.onSignalabUriSelected(context, uri)
+                                                    },
+                                                    onLaunchScan = { path ->
+                                                        viewModel.launchSignalabScan(context, path)
+                                                    },
+                                                    onOpenSignDialog = {
+                                                        viewModel.openSignalabSignDialog()
+                                                    },
+                                                    onDismissSignDialog = {
+                                                        viewModel.dismissSignalabSignDialog()
+                                                    },
+                                                    onConfirmSignAndRepack = { options ->
+                                                        viewModel.executeSignalabResignAndRepack(context, options)
+                                                    },
+                                                    onRefreshFiles = {
+                                                        viewModel.refreshVerisinApks(context)
+                                                    },
+                                                    onOpenTerminal = {
+                                                        viewModel.openBottomTerminal()
                                                     },
                                                     onBackToHome = {
                                                         viewModel.selectScreen(Screen.HOME)

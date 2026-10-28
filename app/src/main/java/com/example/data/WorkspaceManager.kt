@@ -203,6 +203,24 @@ object WorkspaceManager {
         return dir
     }
 
+    fun getSignalabDataDir(context: Context): File {
+        val dir = File(getSubDir(context, "Data"), "Signalab")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    fun getSignalabScanDir(context: Context): File {
+        val dir = File(getSignalabDataDir(context), "scan")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    fun getSignalabLaboutDir(context: Context): File {
+        val dir = File(getSignerDir(context), "LABOUT")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
     fun sanitizePath(input: String): String {
         var clean = input.trim()
         // Strip angle brackets <...> if present from command examples

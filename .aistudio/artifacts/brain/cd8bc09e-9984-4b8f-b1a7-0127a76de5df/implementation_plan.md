@@ -1,158 +1,130 @@
-# Moteur & Suite Cryptographique SCEAU (VERISIN & KEYCORE)
+# Plan d'Implémentation — Fonctionnalité SIGNALAB & Module IMG Signer
 
-Ce plan détaille la mise en place de la fonctionnalité maîtresse **SCEAU** au cœur d'HephaistOS, intégrant en présentation verticale épurée le moteur d'inspection **VERISIN** (conservé sans modification) et le nouveau moteur puissant de forge cryptographique **KEYCORE** (avec ses trois volets : *Keymaker*, *Verisin Key* et *Verisin Clone*).
-
----
-
-## Retours & Choix Utilisateur Confirmés
-
-> [!IMPORTANT]
-> - **Accueil HephaistOS** : La fonctionnalité maîtresse **SCEAU** est ajoutée sur l'accueil (carte rapide `SceauQuickCard`) et dans le rail de navigation, devenant le pôle de sécurité cryptographique.
-> - **Navigation interne SCEAU** : Présentation verticale simple et épurée listant clairement **1. VERISIN** et **2. KEYCORE**.
-> - **VERISIN** : Conservé intégralement tel quel sans aucune régression fonctionnelle ni esthétique.
-> - **KEYCORE** :
->   - **Keymaker** : Générateur universel de jeux de clés (RSA 2048/4096, EC, validité et DN).
->   - **Verisin Key** : Création d'une clé alignée sur les métadonnées techniques d'un APK analysé par Verisin (algorithme, taille, structure) avec personnalisation des identités (DN).
->   - **Verisin Clone** : Création d'une signature parallèle / clone reproduisant l'architecture et les DN originaux de l'APK cible, avec proposition de resignature directe.
-> - **Stockage et compatibilité** : Clés stockées dans `/sdcard/HEPHAISTOS/SCEAU/KEYCORE/` tout en restant synchronisées avec le trousseau global d'HephaistOS (`SIGNER/keysets/` et GÉMEAU).
+Ce plan décrit l'intégration de la suite **SIGNALAB** dans HephaistOS, propulsée par les moteurs **SCEAU**, **VERISIN** et **ANALYST**. Il répond aux exigences d'analyse de signatures ultra-détaillée, de décompaction/recompilation de haute précision (ext4, erofs, payload.bin, zip...), de clustering de clés, de resignature personnalisée ou clone (avec préservation intelligente des GApps), de synchronisation des permissions/contextes SELinux/ART (odex, vdex, oat, fsvmeta), et d'enrichissement de la documentation AHE.
 
 ---
 
-## 1. Vue d'Ensemble & Parcours Utilisateur
+## 1. Architecture des Données et Modèles (`Models.kt`)
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           ÉCRAN D'ACCUEIL HEPHAISTOS                        │
-│  ┌───────────────────────────────────────────────────────────────────────┐  │
-│  │ 🛡️ SCEAU — Moteur & Pôle Cryptographique                 [ Ouvrir ➔ ] │  │
-│  │    Inspection forensique VERISIN • Forge de clés KEYCORE              │  │
-│  └───────────────────────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────┬──────────────────────────────────────┘
-                                       │ Clic sur Ouvrir
-                                       ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                         ESPACE SCEAU (HUB CENTRAL)                          │
-│                                                                             │
-│  ┌─ 1. VERISIN ──────────────────────────────────────────────────────────┐  │
-│  │  🔍 Audit Forensique & Inspection Complète de Signatures APK          │  │
-│  │     Détection V1, V2, V3, V3.1, certificats X.509, hachages & OpenSSL │  │
-│  │     [ Accéder à VERISIN ➔ ]                                           │  │
-│  └───────────────────────────────────────────────────────────────────────┘  │
-│                                                                             │
-│  ┌─ 2. KEYCORE ──────────────────────────────────────────────────────────┐  │
-│  │  🔑 Forge Cryptographique Avancée de Jeux de Clés & Signatures        │  │
-│  │     • Keymaker     : Création rapide de clés personnalisées            │  │
-│  │     • Verisin Key  : Clé calquée sur la structure d'un APK cible      │  │
-│  │     • Verisin Clone: Clé miroir reproduisant les DN & signatures       │  │
-│  │     [ Accéder à KEYCORE ➔ ]                                           │  │
-│  └───────────────────────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────┬──────────────────────────────────────┘
-                   ┌───────────────────┴───────────────────┐
-                   ▼                                       ▼
-┌─────────────────────────────────────┐ ┌─────────────────────────────────────┐
-│           ÉCRAN VERISIN             │ │           ÉCRAN KEYCORE             │
-│ (Conservé à l'identique)            │ │ Onglets / Modes :                   │
-│ - Sélecteur d'APK SAF / Espace      │ │ 1. [Keymaker]                       │
-│ - Badge V1/V2/V3                    │ │ 2. [Verisin Key]                    │
-│ - Certificats, Hashes & OpenSSL     │ │ 3. [Verisin Clone]                  │
-│ - Export automatique des rapports   │ │ - Aperçu technique                  │
-│                                     │ │ - Bouton "Générer la clé"           │
-│                                     │ │ - Bouton "Signer directement l'APK" │
-└─────────────────────────────────────┘ └─────────────────────────────────────┘
-```
+### Nouvelles Structures de Données :
+- **`Screen.SIGNALAB("Signalab")`** : Ajout à la navigation principale et à l'écran d'accueil.
+- **`SignalabModule`** : Énumération (`IMG_SIGNER`, et futures extensions).
+- **`SignalabScanBlueprint`** :
+  - Métadonnées du conteneur d'origine (format ext4, erofs, payload, zip, taille de blocs, taille de partition, descripteurs d'inodes, xattrs).
+  - Arborescence complète (`filesystem_tree.json`).
+  - Contextes de sécurité SELinux (`file_contexts`, `fs_config`).
+- **`ApkSignatureCluster`** :
+  - Clé / Empreinte SHA-256 du certificat.
+  - Rôle détecté (`PLATFORM`, `MEDIA`, `SHARED`, `NETWORKSTACK`, `GOOGLE_SERVICES`, `THIRD_PARTY`).
+  - Liste des applications associées (chemins relatifs dans la partition, noms de paquets, versions).
+  - Détails cryptographiques complets issus de `VerisinResult` (schémas V1/V2/V3/V4, algorithmes, tailles de clés, DNs).
+- **`SignalabSignChoice`** :
+  - Mode : `CUSTOM_SIGN` (identités personnalisées créées selon les spécifications cibles) vs `CLONE_SIGN` (reproduction miroir de la chaîne de confiance et des Subject DNs).
+  - Préservation des GApps / Google Services (option activée par défaut pour garantir SafetyNet / Play Protect).
+  - Gestion des artefacts ART : Nettoyage / suppression des anciens `.odex`, `.vdex`, `.oat` et nettoyage `fsvmeta` (pour éviter les bootloops de somme de contrôle Dalvik au démarrage) avec régénération runtime.
+- **`SignalabUiState`** :
+  - Chemin du fichier sélectionné, état du scan en cours, progression détaillée.
+  - Résultat du scan : blueprint, clusters détectés, liste des APKs répertoriés, dépendances de permissions.
+  - État de la boîte de dialogue de resignature (Popup de choix CUSTOM vs CLONE).
+  - État de la resignature et du repack final vers `sdcard/HEPHAISTOS/SIGNER/LABOUT/`.
 
 ---
 
-## 2. Conception de KEYCORE (Les 3 Sous-Outils)
+## 2. Gestionnaire d'Espace de Travail (`WorkspaceManager.kt`)
 
-### A. Keymaker (Forge Standard)
-- Création rapide de clés de signature Android (PK8 + X.509 PEM / DER / BKS).
-- Paramètres :
-  - Nom du keyset (ex: `my_rom_keyset`).
-  - Common Name (CN), Organisation (O), Unité d'organisation (OU), Localité (L), Région/État (ST), Pays (C).
-  - Algorithme : RSA 2048 (standard), RSA 4096 (haute sécurité), ECDSA P-256.
-  - Période de validité : de 1 à 30 ans.
-
-### B. Verisin Key (Clé Calquée sur Cible)
-- L'utilisateur sélectionne un APK cible (via explorateur SAF ou puces d'accès rapide de `/sdcard/HEPHAISTOS/`).
-- **Inspection Verisin automatique** en arrière-plan :
-  - Extraction de l'algorithme exact de la cible (ex: `SHA256withRSA`, RSA 2048, ou `SHA1withRSA`).
-  - Détection du schéma de signature requis (V1, V2, V3).
-- **Formulaire assisté** :
-  - Les spécifications techniques (taille de clé, algo de hachage, schéma) sont pré-remplies et verrouillées pour garantir la stricte compatibilité.
-  - L'utilisateur saisit uniquement ses identités propres (DN : CN, O, C...).
-- Création d'une clé neuve parfaitement conforme aux exigences de l'APK cible.
-
-### C. Verisin Clone (Signature Parallèle & Resignature Directe)
-- Analyse complète de l'APK cible avec Verisin.
-- **Récupération des métadonnées du certificat original** :
-  - Extraction exacte du `Subject DN` (ex: `CN=Android, OU=Android, O=Android, L=Mountain View, ST=California, C=US`).
-  - Algorithme identique (`SHA256withRSA`, etc.).
-  - Période de validité et propriétés X.509 répliquées.
-- **Génération de la paire de clés clonée** :
-  - Forge d'une nouvelle clé privée et d'un certificat X.509 miroir portant exactement les mêmes identifiants et attributs que la signature cible.
-- **Flux d'action direct** :
-  - Sauvegarde du keyset dans `/sdcard/HEPHAISTOS/SCEAU/KEYCORE/clones/<apk_name>_clone/`.
-  - Bouton d'action immédiat : **« Resigner l'APK cible avec cette signature clone »** avec support multi-schémas (V1 + V2 + V3).
+Création et maintenance automatique des nouveaux répertoires :
+- `/sdcard/HEPHAISTOS/Data/Signalab/scan/<scan_id>/` :
+  - `repack_blueprint.json` (géométrie, format de bloc, xattrs, table de liens).
+  - `filesystem_tree.json` (arborescence exhaustive de chaque chemin).
+  - `apk_signature_clusters.json` (regroupement des applications par clé).
+  - `key_mapping.json` (mapping précis des clés détectées).
+  - `permissions_database.json` et `signature_dependencies.json` (fichiers de permissions XML et dépendances de signatures).
+- `/sdcard/HEPHAISTOS/SIGNER/LABOUT/` : Répertoire de destination du fichier repacké final.
+- `/sdcard/HEPHAISTOS/UNPACKED/<target_name>/` : Extraction haute précision du contenu.
 
 ---
 
-## 3. Architecture Technique & Nouveaux Composants
+## 3. Moteur Principal `SignalabEngine.kt`
 
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│                              Composants UI                             │
-│  - HomeScreen.kt         -> SceauQuickCard                             │
-│  - HephaistNavRail.kt    -> NavRailItem(SCEAU)                         │
-│  - SceauScreen.kt        -> Hub vertical avec sous-écrans :            │
-│                             ├─ SceauHubView (Liste Verisin + Keycore)  │
-│                             ├─ VerisinScreen (Intégré sans régression) │
-│                             └─ KeycoreScreen (Keymaker/Key/Clone)      │
-└───────────────────────────────────┬────────────────────────────────────┘
-                                    │
-                                    ▼
-┌────────────────────────────────────────────────────────────────────────┐
-│                           HephaistViewModel                            │
-│  - sceauUiState (sous-écran actif, état Keycore, clés disponibles)     │
-│  - verisinUiState (inchangé et synchronisé)                            │
-│  - generateKeycoreKeyset(), cloneApkSignature(), signWithCloneKey()    │
-└───────────────────────────────────┬────────────────────────────────────┘
-                                    │
-                  ┌─────────────────┴─────────────────┐
-                  ▼                                   ▼
-┌───────────────────────────────────┐ ┌───────────────────────────────────┐
-│           VerisinEngine           │ │           KeycoreEngine           │
-│  - verifyApkFile (existant)       │ │  - generateStandardKeyset         │
-│  - extractCertMetadata            │ │  - createVerisinKeyFromApk        │
-│  - parseSignatureSchemes          │ │  - cloneApkSignatureKeyset        │
-│                                   │ │  - signApkWithCloneKey            │
-└───────────────────────────────────┘ └───────────────────────────────────┘
-```
+Le moteur orchestrera l'ensemble du workflow en 4 phases majeures :
 
-1. **`KeycoreEngine.kt` (`com.example.data`)** :
-   - Moteur cryptographique complet s'appuyant sur BouncyCastle / Android Java Security.
-   - Génération de paires de clés RSA (2048/4096) et EC.
-   - Forge de certificats X.509 auto-signés conformes aux standards Android APK Signing.
-   - Export aux formats standardisés : `.pk8` (clé privée DER PKCS#8), `.x509.pem` (certificat), et intégration avec `GemeauSignerEngine`.
-2. **`SceauScreen.kt` & `KeycoreScreen.kt` (`com.example.ui.screens`)** :
-   - `SceauScreen.kt` : Hub épuré avec navigation fluide (BackHandler vers le Hub, puis vers l'Accueil).
-   - `KeycoreScreen.kt` : Sélecteur d'APK, affichage des caractéristiques extraites par Verisin, formulaires DN et boutons d'action unifiés.
-3. **`WorkspaceManager.kt`** :
-   - Ajout des répertoires dédiés :
-     - `getSceauDir()` -> `/sdcard/HEPHAISTOS/SCEAU/`
-     - `getKeycoreDir()` -> `/sdcard/HEPHAISTOS/SCEAU/KEYCORE/`
-     - `getKeycoreClonesDir()` -> `/sdcard/HEPHAISTOS/SCEAU/KEYCORE/clones/`
-4. **`Screen.kt` & `MainActivity.kt`** :
-   - Déclaration de `Screen.SCEAU`.
-   - Câblage de l'écran avec gestion du retour arrière et synchronisation avec le terminal.
+### Phase A : Décompaction Haute Précision
+- Prise en charge universelle : `ext4`, `erofs`, `payload.bin`, `zip`, images raw/sparse.
+- Détection automatique du système de fichiers et des attributs sous-jacents (modes root et non-root via wrappers natifs existants : `KitchenEngine`, `simg2img`, `payload-dumper-go`, `erofs-utils`, `e2fsdroid`).
+- Extraction récursive en conservant :
+  - Les liens symboliques et liens physiques (hardlinks).
+  - Les permissions UID / GID et les modes octaux.
+  - Les descripteurs de sécurité SELinux (`security.selinux`) et les `fs_config`.
+- Écriture instantanée du `repack_blueprint.json`.
+
+### Phase B : Scan Approfondi & Audit Cryptographique VERISIN
+- Parcours complet de l'arborescence extraite (`app/`, `priv-app/`, `framework/`, `apex/`, etc.).
+- Exécution de `VerisinEngine.verifyApkFile` sur chaque fichier APK :
+  - Extraction de l'ensemble des schémas de signature (V1, V2, V3, V4).
+  - Certificats X.509 : DN du propriétaire, DN de l'émetteur, numéro de série, dates de validité.
+  - Condensats : MD5, SHA-1, SHA-224, SHA-256, SHA-384, SHA-512, CRC32, HashCode.
+  - Clés publiques, bits de signatures et représentations Base64.
+- Regroupement des APKs en clusters cryptographiques (`apk_signature_clusters.json`) et cartographie (`key_mapping.json`).
+- Extraction et analyse des permissions dépendantes de la signature (`privapp-permissions-*.xml`, `platform.xml`).
+
+### Phase C : Resignature Intelligente & Synchronisation
+- Forge des clés via le moteur `SCEAU` / `KEYCORE` :
+  - **Option CUSTOM SIGN** : Génération de clés personnalisées (mêmes algorithmes, même typologie de clé, même schéma) pour chaque cluster de clés, avec conservation scrupuleuse du mapping original.
+  - **Option CLONE SIGN** : Clonage miroir du Subject DN et de l'architecture de clé de chaque cluster.
+  - **Préservation GApps** : Détection des certificats Google (`CN=Android,O=Google Inc.` / `android@android.com`) pour les laisser intacts si l'option est activée.
+- Resignature des APKs via `GemeauSignerEngine`.
+- Mise à jour et nettoyage des dépendances :
+  - Correction des balises de signature dans les fichiers de permissions XML.
+  - Suppression/nettoyage des artefacts précompilés obsolètes (`.odex`, `.vdex`, `.oat`) pour éviter les échecs de boot (bootloop par désynchronisation de checksum Dalvik/ART).
+  - Nettoyage / actualisation des métadonnées fs-verity (`fsvmeta`).
+  - Restauration et alignement des contextes SELinux et droits Unix.
+
+### Phase D : Recompilation / Repack Haute Fidélité
+- Lecture du `repack_blueprint.json`.
+- Recompilation dans le format d'origine (ext4 sparse/raw, erofs, zip) en utilisant les contextes de sécurité d'origine et la géométrie de blocs enregistrée.
+- Exportation du fichier final vers `/sdcard/HEPHAISTOS/SIGNER/LABOUT/<nom_fichier_signe>.<ext>`.
 
 ---
 
-## 4. Tests & Vérification
+## 4. Interface Utilisateur & Intégration (`SignalabScreen.kt`, `HomeScreen.kt`, `HephaistNavRail.kt`)
 
-- Tests unitaires Robolectric (`KeycoreEngineTest.kt` et `VerisinEngineTest.kt`) :
-  - Validation de la génération de clés Keymaker.
-  - Validation de l'extraction et du clonage de certificat via Verisin Clone.
-  - Validation de la signature d'un APK test avec la clé clonée.
-  - Validation de la navigation et de la persistance des clés.
-- Compilation continue via `compile_applet`.
+- **Écran d'Accueil (`HomeScreen.kt`)** :
+  - Ajout d'une carte maîtresse `SignalabQuickCard` dans la liste verticale principale avec indicateur d'état, icône technologique et tag de test `home_signalab_card`.
+- **Barre de Navigation Latérale (`HephaistNavRail.kt`)** :
+  - Ajout du raccourci `SIGNALAB`.
+- **Écran Dédié `SignalabScreen.kt`** :
+  - En-tête avec état de l'environnement et sélecteur de module (`IMG Signer`).
+  - Champ de sélection de fichier avec sélecteur SAF et chips d'accès rapide (`/sdcard/HEPHAISTOS/`).
+  - Bouton d'action **LANCER** déclenchant le scan et l'unpacking haute précision.
+  - Zone de progression interactive en direct (étapes : Unpack, Scan Verisin, Clustering, Mapping).
+  - Affichage structuré du résumé du scan :
+    - Format détecté, taille, géométrie, nombre total de fichiers.
+    - Nombre d'APKs scannés, liste des clusters de clés identifiés avec badges de rôles.
+  - **Boîte de dialogue (POPUP) de Resignature** :
+    - Choix entre **CUSTOM SIGN** et **CLONE SIGN**.
+    - Champs de personnalisation d'identité (CN, Org, Pays) si CUSTOM SIGN est sélectionné.
+    - Toggles : Préservation des GApps (recommandé), Gestion des fichiers ART (Nettoyer/Régénérer au premier démarrage).
+    - Bouton de lancement de la resignature et du repack vers LABOUT.
+  - Carte de résultat final avec chemin du fichier généré, boutons pour copier le chemin et inspecter le rapport dans le Terminal.
+
+---
+
+## 5. Enrichissement de la Documentation AHE (`DOC_AHE_EXTENSIONS.md`)
+
+- Enrichissement complet de `DOC_AHE_EXTENSIONS.md` et de la documentation GitHub :
+  - Ajout d'une section dédiée à l'intégration avec **SIGNALAB** et **SCEAU**.
+  - Spécification des métadonnées étendues de décompaction/recompilation.
+  - Exemples concrets d'extensions `.ahe` manipulant des images système et exploitant les résultats de scan de Signalab via l'IPC.
+  - Bonnes pratiques pour la conformité SELinux et le dexopt runtime sur Android moderne.
+
+---
+
+## 6. Tests et Validation
+
+- Écriture d'un test unitaire Robolectric complet dans `SignalabEngineTest.kt` vérifiant :
+  - L'analyse d'image et le calcul du blueprint.
+  - L'arborescence `filesystem_tree.json`.
+  - Le clustering des APKs et le mapping des clés.
+  - Le flux de resignature CUSTOM et CLONE.
+  - L'écriture vers `LABOUT/`.
+- Compilation complète via `compile_applet`.

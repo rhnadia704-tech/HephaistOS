@@ -248,3 +248,52 @@ Un template modèle officiel est généré automatiquement par HephaistOS dans :
 `/sdcard/HEPHAISTOS/Templates/ahe_template/`
 
 Vous pouvez l'utiliser comme base de départ pour créer vos propres extensions en clonant simplement cette arborescence.
+
+---
+
+## 9. Interopérabilité Souveraine avec SIGNALAB & SCEAU
+
+HephaistOS expose automatiquement les bases de données et les moteurs cryptographiques de **SIGNALAB** et **SCEAU** aux extensions `.ahe`.
+
+### Variables d'Environnement Dédiées Injectées :
+Lorsqu'un script d'extension est exécuté, les variables suivantes sont exportées dans l'environnement d'exécution :
+- `HEPHAISTOS_SIGNALAB_SCAN_DIR` : `/sdcard/HEPHAISTOS/Data/Signalab/scan/` (accès aux arborescences `filesystem_tree.json`, blueprints et clusters).
+- `HEPHAISTOS_SIGNALAB_LABOUT_DIR` : `/sdcard/HEPHAISTOS/SIGNER/LABOUT/` (destination des images recompilées et résignées).
+- `HEPHAISTOS_SCEAU_KEYCORE_DIR` : `/sdcard/HEPHAISTOS/SCEAU/KEYCORE/` (trousseaux AOSP, clés Verisin et clones).
+- `HEPHAISTOS_UNPACKED_DIR` : `/sdcard/HEPHAISTOS/UNPACKED/` (partitions et ROMs décompressées de haute précision).
+
+### Exploitation des Données de Scan Signalab dans un Script AHE :
+```bash
+#!/system/bin/sh
+# Récupération du dernier scan Signalab
+LAST_SCAN=$(ls -td "$HEPHAISTOS_SIGNALAB_SCAN_DIR"/scan_* 2>/dev/null | head -n 1)
+
+if [ -n "$LAST_SCAN" ] && [ -f "$LAST_SCAN/apk_signature_clusters.json" ]; then
+    echo "[AHE IPC] Lecture des clusters cryptographiques depuis : $LAST_SCAN"
+    CLUSTERS_COUNT=$(grep -c '"cluster_id"' "$LAST_SCAN/apk_signature_clusters.json")
+    echo "[AHE IPC] $CLUSTERS_COUNT clusters de signature identifiés par Signalab."
+fi
+```
+
+### Retour de Progression Dynamique dans l'Interface HephaistOS :
+Pour animer dynamiquement la barre de progression de l'extension dans HephaistOS :
+```bash
+echo "[PROGRESS:25] Analyse des descripteurs d'inodes..."
+echo "[STATUS:Vérification des signatures...]"
+echo "[PROGRESS:75] Injection des patchs de permissions..."
+echo "[PROGRESS:100] Terminé avec succès !"
+```
+
+---
+
+## 10. Bonnes Pratiques pour le Référencement GitHub d'une Extension AHE
+
+1. **Architecture Binaire ARM64 (`aarch64-linux-android`)** :
+   - Tous les binaires exécutables dans `bin/` doivent être statiquement liés (`-static`) ou liés contre le runtime Bionic d'Android pour fonctionner sans dépendances externes.
+2. **Gestion de SELinux & Permissions** :
+   - Déclarez toujours `"permissions": ["STORAGE", "ROOT"]` si votre extension manipule des systèmes de fichiers ou monte des images en boucle locale (`loop`).
+3. **Mise à Jour des Artefacts ART & fs-verity** :
+   - Toute modification ou resignature d'APKs système doit systématiquement purger les fichiers `.odex`, `.vdex` et `.oat` correspondants pour permettre à Android d'exécuter un `dexopt` runtime propre sans déclencher de bootloop.
+4. **Validation et Compatibilité** :
+   - Assurez-vous que votre `manifest.json` respecte la casse exacte des identifiants et inclut une description concise sous 120 caractères.
+

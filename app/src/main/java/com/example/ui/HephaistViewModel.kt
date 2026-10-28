@@ -57,6 +57,9 @@ import com.example.model.KeycoreTab
 import com.example.model.SceauSubScreen
 import com.example.model.SceauUiState
 import com.example.data.AnalystEngine
+import com.example.data.SignalabEngine
+import com.example.model.SignalabUiState
+import com.example.model.SignalabSignOptions
 import java.io.File
 import java.io.InputStream
 import java.text.SimpleDateFormat
@@ -96,6 +99,7 @@ data class HephaistUiState(
     val aheUiState: AheUiState = AheUiState(),
     val analystUiState: AnalystUiState = AnalystUiState(),
     val sceauUiState: SceauUiState = SceauUiState(),
+    val signalabUiState: SignalabUiState = SignalabUiState(),
     val verisinSelectedPath: String = "",
     val isVerifyingVerisin: Boolean = false,
     val verisinResult: VerisinEngine.VerisinResult? = null,
@@ -2670,6 +2674,185 @@ class HephaistViewModel(application: Application) : AndroidViewModel(application
                             )
                         )
                     }
+                }
+            }
+        }
+    }
+
+    // ==========================================
+    // SIGNALAB — Actions & Workflow
+    // ==========================================
+
+    fun setSignalabFilePath(path: String) {
+        _uiState.update {
+            it.copy(signalabUiState = it.signalabUiState.copy(selectedFilePath = path, errorMessage = null))
+        }
+    }
+
+    fun onSignalabUriSelected(context: Context, uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val resolvedFile = WorkspaceManager.copyUriToWorkspace(context, uri)
+            withContext(Dispatchers.Main) {
+                if (resolvedFile != null) {
+                    setSignalabFilePath(resolvedFile.absolutePath)
+                    logTerminal("[SIGNALAB] Fichier importé : ${resolvedFile.name}", isSuccess = true)
+                } else {
+                    _uiState.update {
+                        it.copy(signalabUiState = it.signalabUiState.copy(errorMessage = "Échec d'accès au fichier sélectionné"))
+                    }
+                }
+            }
+        }
+    }
+
+    fun launchSignalabScan(context: Context, filePath: String) {
+        val cleanPath = WorkspaceManager.sanitizePath(filePath)
+        val file = WorkspaceManager.resolveApkPath(context, cleanPath) ?: File(cleanPath)
+        if (!file.exists()) {
+            _uiState.update {
+                it.copy(
+                    signalabUiState = it.signalabUiState.copy(
+                        errorMessage = "Fichier introuvable : '$cleanPath'"
+                    )
+                )
+            }
+            logTerminal("[ERREUR SIGNALAB] Fichier cible introuvable : $cleanPath")
+            return
+        }
+
+        _uiState.update {
+            it.copy(
+                signalabUiState = it.signalabUiState.copy(
+                    isScanning = true,
+                    scanStepText = "Initialisation du déballage haute précision...",
+                    scanProgress = 0.05f,
+                    errorMessage = null,
+                    statusMessage = null,
+                    finalRepackedPath = null
+                )
+            )
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                // Step 1: Unpack
+                val blueprint = SignalabEngine.unpackTargetFile(
+                    context = context,
+                    targetFile = file,
+                    onProgress = { step, prog ->
+                        _uiState.update {
+                            it.copy(signalabUiState = it.signalabUiState.copy(scanStepText = step, scanProgress = prog * 0.5f))
+                        }
+                    },
+                    onLog = { logTerminal(it) }
+                )
+
+                // Step 2: Deep Verisin scan & clustering
+                val scanResult = SignalabEngine.scanAndClusterApkSignatures(
+                    context = context,
+                    blueprint = blueprint,
+                    onProgress = { step, prog ->
+                        _uiState.update {
+                            it.copy(signalabUiState = it.signalabUiState.copy(scanStepText = step, scanProgress = 0.5f + (prog * 0.5f)))
+                        }
+                    },
+                    onLog = { logTerminal(it) }
+                )
+
+                withContext(Dispatchers.Main) {
+                    _uiState.update {
+                        it.copy(
+                            signalabUiState = it.signalabUiState.copy(
+                                isScanning = false,
+                                scanResult = scanResult,
+                                statusMessage = "Scan terminé avec succès : ${scanResult.clusters.size} clusters de clés identifiés."
+                            )
+                        )
+                    }
+                    showSnackbar("Scan Signalab prêt")
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    _uiState.update {
+                        it.copy(
+                            signalabUiState = it.signalabUiState.copy(
+                                isScanning = false,
+                                errorMessage = "Échec du scan : ${e.message}"
+                            )
+                        )
+                    }
+                    logTerminal("[ERREUR SIGNALAB CRITIQUE] ${e.message}")
+                }
+            }
+        }
+    }
+
+    fun openSignalabSignDialog() {
+        _uiState.update {
+            it.copy(signalabUiState = it.signalabUiState.copy(showSignDialog = true))
+        }
+    }
+
+    fun dismissSignalabSignDialog() {
+        _uiState.update {
+            it.copy(signalabUiState = it.signalabUiState.copy(showSignDialog = false))
+        }
+    }
+
+    fun executeSignalabResignAndRepack(context: Context, options: SignalabSignOptions) {
+        val scanResult = _uiState.value.signalabUiState.scanResult ?: return
+        dismissSignalabSignDialog()
+
+        _uiState.update {
+            it.copy(
+                signalabUiState = it.signalabUiState.copy(
+                    isResigningAndRepacking = true,
+                    resignStepText = "Démarrage de la resignature intégrale...",
+                    resignProgress = 0.05f,
+                    errorMessage = null,
+                    statusMessage = null,
+                    finalRepackedPath = null
+                )
+            )
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val repackedFile = SignalabEngine.executeResignAndRepack(
+                    context = context,
+                    scanResult = scanResult,
+                    options = options,
+                    onProgress = { step, prog ->
+                        _uiState.update {
+                            it.copy(signalabUiState = it.signalabUiState.copy(resignStepText = step, resignProgress = prog))
+                        }
+                    },
+                    onLog = { logTerminal(it) }
+                )
+
+                withContext(Dispatchers.Main) {
+                    _uiState.update {
+                        it.copy(
+                            signalabUiState = it.signalabUiState.copy(
+                                isResigningAndRepacking = false,
+                                finalRepackedPath = repackedFile.absolutePath,
+                                statusMessage = "ROM resignée et recompilée avec succès dans LABOUT !"
+                            )
+                        )
+                    }
+                    showSnackbar("Fichier LABOUT prêt : ${repackedFile.name}")
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    _uiState.update {
+                        it.copy(
+                            signalabUiState = it.signalabUiState.copy(
+                                isResigningAndRepacking = false,
+                                errorMessage = "Échec de resignature/repack : ${e.message}"
+                            )
+                        )
+                    }
+                    logTerminal("[ERREUR SIGNALAB] ${e.message}")
                 }
             }
         }

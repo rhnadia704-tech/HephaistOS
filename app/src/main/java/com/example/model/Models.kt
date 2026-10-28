@@ -7,6 +7,7 @@ enum class Screen(val title: String) {
     GEMEAU("Géméau"),
     ANALYST("Analyst"),
     SCEAU("Sceau"),
+    SIGNALAB("Signalab"),
     VERISIN("Verisin"),
     AHE_EXTENSION("Extension .ahe"),
     SETTINGS("Paramètres")
@@ -410,6 +411,87 @@ data class KeycoreUiState(
 data class SceauUiState(
     val currentSubScreen: SceauSubScreen = SceauSubScreen.HUB,
     val keycoreState: KeycoreUiState = KeycoreUiState()
+)
+
+// ==========================================
+// SIGNALAB — Suite de décompaction, scan et resignature
+// ==========================================
+
+enum class SignalabModule(val title: String, val description: String) {
+    IMG_SIGNER("IMG Signer", "Décompaction haute précision, audit Verisin & resignature intégrale")
+}
+
+data class SignalabScanBlueprint(
+    val scanId: String = "",
+    val sourceFilePath: String = "",
+    val sourceFileName: String = "",
+    val sourceFileSize: Long = 0L,
+    val containerFormat: String = "", // "ext4", "erofs", "payload.bin", "zip", "raw_img", "sparse_img"
+    val partitionName: String = "",
+    val unpackedDirPath: String = "",
+    val scanDataDirPath: String = "",
+    val totalExtractedFiles: Int = 0,
+    val totalApksFound: Int = 0,
+    val blockSize: Int = 4096,
+    val partitionSizeBytes: Long = 0L,
+    val hasSelinuxContexts: Boolean = false,
+    val hasFsConfig: Boolean = false,
+    val scanTimestamp: Long = System.currentTimeMillis()
+)
+
+data class ApkSignatureCluster(
+    val clusterId: String,
+    val clusterRole: String, // "PLATFORM", "MEDIA", "SHARED", "NETWORKSTACK", "GOOGLE_SERVICES", "THIRD_PARTY"
+    val certificateFingerprintSha256: String,
+    val subjectDn: String,
+    val issuerDn: String,
+    val keyType: String,
+    val keySizeBits: Int,
+    val sigAlgName: String,
+    val schemesDisplay: String,
+    val isGoogleServices: Boolean = false,
+    val associatedApks: List<String> = emptyList() // Relative paths of APKs
+)
+
+enum class SignalabSignMode(val label: String, val description: String) {
+    CUSTOM_SIGN("Custom Sign", "Nouvelle identité personnalisée, en conservant le mapping et l'architecture exacte de la cible"),
+    CLONE_SIGN("Clone Sign", "Reproduction miroir des Subject DNs et de la chaîne de confiance d'origine")
+}
+
+data class SignalabSignOptions(
+    val mode: SignalabSignMode = SignalabSignMode.CLONE_SIGN,
+    val customCommonName: String = "Signalab Certified",
+    val customOrganization: String = "HephaistOS Sovereign",
+    val customCountry: String = "FR",
+    val preserveGoogleApps: Boolean = true,
+    val cleanArtArtifacts: Boolean = true, // Clear old odex/vdex/oat and fsvmeta to prevent bootloop
+    val outputFormat: String = "AUTO" // Auto-detect from blueprint
+)
+
+data class SignalabScanResult(
+    val blueprint: SignalabScanBlueprint = SignalabScanBlueprint(),
+    val clusters: List<ApkSignatureCluster> = emptyList(),
+    val keyMapping: Map<String, String> = emptyMap(), // apkPath -> clusterId
+    val permissionFilesCount: Int = 0,
+    val artFilesCount: Int = 0, // Count of .odex, .vdex, .oat found
+    val fsvmetaCount: Int = 0
+)
+
+data class SignalabUiState(
+    val activeModule: SignalabModule = SignalabModule.IMG_SIGNER,
+    val selectedFilePath: String = "",
+    val isScanning: Boolean = false,
+    val scanStepText: String = "",
+    val scanProgress: Float = 0f,
+    val scanResult: SignalabScanResult? = null,
+    val showSignDialog: Boolean = false,
+    val signOptions: SignalabSignOptions = SignalabSignOptions(),
+    val isResigningAndRepacking: Boolean = false,
+    val resignStepText: String = "",
+    val resignProgress: Float = 0f,
+    val finalRepackedPath: String? = null,
+    val errorMessage: String? = null,
+    val statusMessage: String? = null
 )
 
 
