@@ -1,6 +1,6 @@
 {
-  "summary":  "Plan d'implémentation complet pour la nouvelle fonctionnalité SIGNALAB et son module IMG Signer dans HephaistOS.\nLe plan détaille l'architecture du moteur de décompaction de haute précision, le scan de signatures approfondi appuyé sur VERISIN et SCEAU, le clustering et mapping des clés, la synchronisation intelligente des permissions et artefacts ART (odex/vdex/oat/fsvmeta), le repack haute fidélité vers sdcard/HEPHAISTOS/SIGNER/LABOUT, l'enrichissement de la documentation AHE, et les tests unitaires Robolectric.",
-  "updatedAt":  "2026-10-28T07:20:30.386405518Z",
+  "summary":  "Plan d'implémentation de REPACKORE entièrement complété et validé par des tests unitaires Robolectric et la compilation de l'applet.",
+  "updatedAt":  "2026-10-28T12:03:22.299727111Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

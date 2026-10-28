@@ -498,8 +498,8 @@ object SignalabEngine {
         onProgress("Synchronisation des déclarations de permissions XML...", 0.78f)
         synchronizePermissionsXml(unpackDir, forgedKeysets, onLog)
 
-        // 3.5 Recompilation / Repack Haute Précision
-        onProgress("Recompilation haute précision de l'image...", 0.85f)
+        // 3.5 Recompilation Haute Précision via le moteur REPACKORE
+        onProgress("REPACKORE : Recompilation et synthèse de la partition...", 0.82f)
         val originalFormat = scanResult.blueprint.containerFormat
         val outFileName = "${scanResult.blueprint.partitionName}_resigned." + when (originalFormat) {
             "zip" -> "zip"
@@ -509,17 +509,25 @@ object SignalabEngine {
         }
         val finalOutputFile = File(laboutDir, outFileName)
 
-        repackFilesystem(
+        RepackoreEngine.compilePartitionImage(
             context = context,
-            sourceUnpackedDir = unpackDir,
+            unpackedDir = unpackDir,
             blueprint = scanResult.blueprint,
-            destFile = finalOutputFile,
+            outputFile = finalOutputFile,
             onProgress = onProgress,
             onLog = onLog
         )
 
+        // 3.6 Audit Cryptographique Post-Compilation Automatique
+        onProgress("Audit de certification des signatures post-compilation...", 0.94f)
+        RepackoreEngine.verifyCompiledImageSignatures(
+            context = context,
+            imageFile = finalOutputFile,
+            onLog = onLog
+        )
+
         onLog("=================================================================")
-        onLog("[SIGNALAB:TERMINÉ] Resignature et Recompilation accomplies à 100% !")
+        onLog("[SIGNALAB:TERMINÉ] Resignature et Recompilation REPACKORE accomplies à 100% !")
         onLog("Fichier final prêt dans LABOUT : ${finalOutputFile.absolutePath}")
         onLog("Taille finale : ${finalOutputFile.length()} octets")
         onLog("=================================================================")
@@ -710,65 +718,6 @@ object SignalabEngine {
         // Scan and update permission tags if relevant
         onLog("[SYNCHRONISATION PERMISSIONS] Alignement des empreintes cryptographiques dans /etc/permissions/...")
     }
-
-    private suspend fun repackFilesystem(
-        context: Context,
-        sourceUnpackedDir: File,
-        blueprint: SignalabScanBlueprint,
-        destFile: File,
-        onProgress: (String, Float) -> Unit,
-        onLog: (String) -> Unit
-    ) {
-        if (destFile.parentFile?.exists() != true) {
-            destFile.parentFile?.mkdirs()
-        }
-
-        onLog("[REPACK] Recompilation du système de fichiers format '${blueprint.containerFormat}'...")
-        if (blueprint.containerFormat == "zip") {
-            // Compress back to ZIP
-            val buffer = ByteArray(64 * 1024)
-            ZipOutputStream(FileOutputStream(destFile)).use { zos ->
-                val baseUri = sourceUnpackedDir.toURI()
-                val files = sourceUnpackedDir.walkTopDown().filter { it.isFile }.toList()
-                val total = files.size
-                for ((idx, file) in files.withIndex()) {
-                    if (idx % 20 == 0) {
-                        onProgress("Compression ZIP (${idx + 1}/$total)...", 0.85f + (idx.toFloat() / total * 0.12f))
-                    }
-                    val rel = baseUri.relativize(file.toURI()).path
-                    val entry = ZipEntry(rel)
-                    zos.putNextEntry(entry)
-                    FileInputStream(file).use { fis ->
-                        var len: Int
-                        while (fis.read(buffer).also { len = it } > 0) {
-                            zos.write(buffer, 0, len)
-                        }
-                    }
-                    zos.closeEntry()
-                }
-            }
-        } else {
-            // Repack partition using UkaEngine repack logic
-            val repackFormat = if (blueprint.containerFormat in listOf("erofs", "ext4")) blueprint.containerFormat else "ext4"
-            UkaEngine.executeRepack(
-                context = context,
-                targetName = sourceUnpackedDir.name,
-                repackFormat = repackFormat,
-                enableSparse = blueprint.containerFormat == "sparse_img",
-                patchAvb = true,
-                onProgress = { step, prog, logLine ->
-                    onProgress(step, 0.85f + (prog * 0.12f))
-                    onLog(logLine)
-                }
-            )
-            // Copy repacked image from Output or PACKED to destFile
-            val repackedCandidate = File(WorkspaceManager.getPackedDir(context), "${sourceUnpackedDir.name}_repacked.img")
-            if (repackedCandidate.exists()) {
-                repackedCandidate.copyTo(destFile, overwrite = true)
-            } else {
-                // If not found in PACKED, create solid raw image placeholder or mirror
-                destFile.writeBytes(ByteArray(1024 * 1024))
-            }
-        }
-    }
 }
+
+

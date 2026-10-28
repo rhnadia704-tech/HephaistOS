@@ -1167,35 +1167,47 @@ object UkaEngine {
             } catch (_: Exception) {}
         }
 
-        // 2. Fallback to partition blocks copy or UKA container reconstruction
+        // 2. Fallback to autonomous block synthesis via REPACKORE or container reconstruction
         if (!toolSuccess) {
-            val candidateImg = sourceTargetDir.walkTopDown().firstOrNull {
-                it.isFile && it.name.endsWith(".img") && it.length() > 1024 && it.absolutePath != outputFile.absolutePath
-            }
-            if (candidateImg != null) {
-                onLog("[REPACK] Reconstruction à partir des blocs de partition réels (${formatFileSize(candidateImg.length())})...")
-                val buf = ByteArray(4 * 1024 * 1024)
-                val totalBytes = candidateImg.length()
-                var totalCopied = 0L
-                var lastNotified = 0L
-                FileInputStream(candidateImg).use { src ->
-                    FileOutputStream(outputFile).use { dst ->
-                        while (true) {
-                            val r = src.read(buf)
-                            if (r == -1) break
-                            dst.write(buf, 0, r)
-                            totalCopied += r
-                            if (totalCopied - lastNotified >= 100 * 1024 * 1024 || totalCopied == totalBytes) {
-                                lastNotified = totalCopied
-                                val pct = (totalCopied.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f)
-                                val mbCopied = totalCopied / (1024 * 1024)
-                                val mbTotal = totalBytes / (1024 * 1024)
-                                onLog("[REPACK BLOCS] $mbCopied / $mbTotal Mo réassemblés (${(pct * 100).toInt()}%)")
+            val nonImgFiles = sourceTargetDir.walkTopDown().filter { it.isFile && !it.name.endsWith(".img") }.toList()
+            if (nonImgFiles.isNotEmpty()) {
+                onLog("[REPACK] Détection de ${nonImgFiles.size} fichiers décompactés/modifiés. Synthèse active de partition via REPACKORE...")
+                val targetSize = metadata?.fileSizeBytes ?: (nonImgFiles.sumOf { it.length() } * 11 / 10).coerceAtLeast(16 * 1024 * 1024L)
+                RepackoreEngine.assembleAutonomousExt4Image(
+                    unpackedDir = sourceTargetDir,
+                    outputFile = outputFile,
+                    targetTotalBytes = targetSize,
+                    onLog = onLog
+                )
+            } else {
+                val candidateImg = sourceTargetDir.walkTopDown().firstOrNull {
+                    it.isFile && it.name.endsWith(".img") && it.length() > 1024 && it.absolutePath != outputFile.absolutePath
+                }
+                if (candidateImg != null) {
+                    onLog("[REPACK] Reconstruction à partir des blocs de partition réels (${formatFileSize(candidateImg.length())})...")
+                    val buf = ByteArray(4 * 1024 * 1024)
+                    val totalBytes = candidateImg.length()
+                    var totalCopied = 0L
+                    var lastNotified = 0L
+                    FileInputStream(candidateImg).use { src ->
+                        FileOutputStream(outputFile).use { dst ->
+                            while (true) {
+                                val r = src.read(buf)
+                                if (r == -1) break
+                                dst.write(buf, 0, r)
+                                totalCopied += r
+                                if (totalCopied - lastNotified >= 100 * 1024 * 1024 || totalCopied == totalBytes) {
+                                    lastNotified = totalCopied
+                                    val pct = (totalCopied.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f)
+                                    val mbCopied = totalCopied / (1024 * 1024)
+                                    val mbTotal = totalBytes / (1024 * 1024)
+                                    onLog("[REPACK BLOCS] $mbCopied / $mbTotal Mo réassemblés (${(pct * 100).toInt()}%)")
+                                }
                             }
                         }
                     }
-                }
-            } else {
+                } else {
+
                 onLog("[REPACK] Génération du conteneur d'image aligné sur les descripteurs UKA...")
                 FileOutputStream(outputFile).use { fos ->
                     val buf = ByteBuffer.allocate(128).order(ByteOrder.LITTLE_ENDIAN)
@@ -1224,6 +1236,9 @@ object UkaEngine {
                 }
             }
         }
+    }
+
+
 
         // 3. AVB 2.0 disable-verity patch if requested
         if (patchAvb && outputFile.exists() && outputFile.length() >= 128) {
