@@ -61,8 +61,89 @@ object WorkspaceManager {
         return dir
     }
 
+    data class StorageRoot(
+        val id: String,
+        val name: String,
+        val path: String,
+        val description: String,
+        val isWorkspace: Boolean = false,
+        val fileCount: Int = 0,
+        val totalSizeBytes: Long = 0L
+    )
+
+    /**
+     * Espace de travail haute performance dans les données internes de l'application (context.filesDir/workspace).
+     * Supprime les restrictions FUSE de la carte SD, offre des I/O ultra-rapides et le support des liens symboliques réels.
+     */
+    fun getInternalWorkspaceDir(context: Context): File {
+        val dir = File(context.filesDir, "workspace")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    /**
+     * Répertoire UNPACKED interne : héberge les projets décompactés haute vélocité.
+     */
+    fun getInternalUnpackDir(context: Context): File {
+        val dir = File(getInternalWorkspaceDir(context), "UNPACKED")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    fun getInternalDataDir(context: Context): File {
+        val dir = File(getInternalWorkspaceDir(context), "Data")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    fun getUnpackedDir(context: Context): File {
+        return getInternalUnpackDir(context)
+    }
+
+    fun getPackedDir(context: Context): File {
+        val externalStorage = Environment.getExternalStorageDirectory()
+        val root = File(externalStorage, ROOT_DIR_NAME)
+        val packed = File(root, "PACKED")
+        if (!packed.exists()) {
+            packed.mkdirs()
+        }
+        return packed
+    }
+
+    fun getRootLocations(context: Context): List<StorageRoot> {
+        val internalStorage = Environment.getExternalStorageDirectory()
+        val workspaceDir = getInternalWorkspaceDir(context)
+
+        val workspaceProjects = getInternalUnpackDir(context).listFiles()?.filter { it.isDirectory }?.size ?: 0
+        val workspaceTotalFiles = try {
+            getInternalWorkspaceDir(context).walkTopDown().filter { it.isFile }.count()
+        } catch (_: Exception) { 0 }
+        val workspaceSize = try {
+            getInternalWorkspaceDir(context).walkTopDown().filter { it.isFile }.sumOf { it.length() }
+        } catch (_: Exception) { 0L }
+
+        return listOf(
+            StorageRoot(
+                id = "root_internal_storage",
+                name = "Stockage Interne",
+                path = internalStorage.absolutePath,
+                description = "Mémoire interne de l'appareil & téléchargements",
+                isWorkspace = false
+            ),
+            StorageRoot(
+                id = "root_app_workspace",
+                name = "Workspace",
+                path = workspaceDir.absolutePath,
+                description = "Données applicatives • $workspaceProjects projet(s) décompacté(s)",
+                isWorkspace = true,
+                fileCount = workspaceTotalFiles,
+                totalSizeBytes = workspaceSize
+            )
+        )
+    }
+
     fun getUnpackDataDir(context: Context): File {
-        val dataDir = getSubDir(context, "Data")
+        val dataDir = getInternalDataDir(context)
         val unpackDir = File(dataDir, "unpack")
         if (!unpackDir.exists()) {
             unpackDir.mkdirs()
@@ -70,13 +151,6 @@ object WorkspaceManager {
         return unpackDir
     }
 
-    fun getUnpackedDir(context: Context): File {
-        return getSubDir(context, "UNPACKED")
-    }
-
-    fun getPackedDir(context: Context): File {
-        return getSubDir(context, "PACKED")
-    }
 
     fun getExtractDir(context: Context): File {
         return getSubDir(context, "EXTRACT")

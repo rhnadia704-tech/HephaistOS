@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -162,44 +163,43 @@ fun InternalFilePickerDialog(
                 Spacer(modifier = Modifier.height(14.dp))
 
                 // Shortcuts Bar
+                val internalStorage = remember { android.os.Environment.getExternalStorageDirectory() }
+                val internalWorkspace = remember { WorkspaceManager.getInternalWorkspaceDir(context) }
+                val internalUnpacked = remember { WorkspaceManager.getInternalUnpackDir(context) }
+
                 LazyRow(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     item {
                         FilterChip(
-                            selected = currentDir == rootWorkspace,
-                            onClick = { currentDir = rootWorkspace },
-                            label = { Text("HEPHAISTOS") },
+                            selected = currentDir == internalStorage,
+                            onClick = { currentDir = internalStorage },
+                            label = { Text("Stockage Interne") },
                             leadingIcon = {
-                                Icon(Icons.Default.Home, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Icon(Icons.Default.PhoneAndroid, contentDescription = null, modifier = Modifier.size(16.dp))
                             }
                         )
                     }
                     item {
-                        val payloads = File(rootWorkspace, "Payloads")
                         FilterChip(
-                            selected = currentDir == payloads,
-                            onClick = {
-                                if (!payloads.exists()) payloads.mkdirs()
-                                currentDir = payloads
-                            },
-                            label = { Text("Payloads/") }
+                            selected = currentDir == internalWorkspace,
+                            onClick = { currentDir = internalWorkspace },
+                            label = { Text("Workspace (Données App)") },
+                            leadingIcon = {
+                                Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(16.dp))
+                            }
                         )
                     }
                     item {
-                        val unpacked = File(rootWorkspace, "UNPACKED")
                         FilterChip(
-                            selected = currentDir == unpacked,
-                            onClick = {
-                                if (!unpacked.exists()) unpacked.mkdirs()
-                                currentDir = unpacked
-                            },
+                            selected = currentDir == internalUnpacked,
+                            onClick = { currentDir = internalUnpacked },
                             label = { Text("UNPACKED/") }
                         )
                     }
                     item {
-                        val downloads = File(android.os.Environment.getExternalStorageDirectory(), "Download")
+                        val downloads = File(internalStorage, "Download")
                         FilterChip(
                             selected = currentDir == downloads,
                             onClick = {
@@ -209,6 +209,7 @@ fun InternalFilePickerDialog(
                         )
                     }
                 }
+
 
                 Spacer(modifier = Modifier.height(8.dp))
 

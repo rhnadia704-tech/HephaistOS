@@ -6,6 +6,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -20,6 +21,8 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.material.icons.filled.FolderOpen
+import com.example.model.Screen
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -108,6 +111,7 @@ fun HomeScreen(
     compatibleApps: List<CompatibleApp>,
     installedExtensions: List<AheExtension> = emptyList(),
     railState: RailState = RailState.COMPACT,
+    pinnedRailScreens: List<Screen> = emptyList(),
     onToggleRailFullscreen: () -> Unit = {},
     onSwipeUpToOpenTerminal: () -> Unit = {},
     onAppClick: (CompatibleApp) -> Unit,
@@ -118,6 +122,8 @@ fun HomeScreen(
     onNavigateToSceau: () -> Unit = {},
     onNavigateToSignalab: () -> Unit = {},
     onNavigateToVerisin: () -> Unit = {},
+    onNavigateToFileManager: () -> Unit = {},
+    onPinToRail: (Screen) -> Unit = {},
     onOpenExtension: (AheExtension) -> Unit = {},
     onOpenPlusDrawer: () -> Unit = {},
     onRefresh: () -> Unit,
@@ -156,42 +162,63 @@ fun HomeScreen(
             // Simple, clean Unpack / Repack Card
             item {
                 UnpackRepackQuickCard(
-                    onOpenModule = onNavigateToUnpackRepack
+                    onOpenModule = onNavigateToUnpackRepack,
+                    onPinToRail = { onPinToRail(Screen.UNPACK_REPACK) },
+                    isPinned = pinnedRailScreens.contains(Screen.UNPACK_REPACK)
                 )
             }
 
             // EXTRACTOR Card: Deep extraction & GSI analysis
             item {
                 ExtractorQuickCard(
-                    onOpenModule = onNavigateToExtractor
+                    onOpenModule = onNavigateToExtractor,
+                    onPinToRail = { onPinToRail(Screen.EXTRACTOR) },
+                    isPinned = pinnedRailScreens.contains(Screen.EXTRACTOR)
                 )
             }
 
             // GEMEAU Card: Keyset Maker, Multi-APK & ROM Signer
             item {
                 GemeauQuickCard(
-                    onOpenModule = onNavigateToGemeau
+                    onOpenModule = onNavigateToGemeau,
+                    onPinToRail = { onPinToRail(Screen.GEMEAU) },
+                    isPinned = pinnedRailScreens.contains(Screen.GEMEAU)
                 )
             }
 
             // ANALYST Card: Factual ROM inspection & APK signatures
             item {
                 AnalystQuickCard(
-                    onOpenModule = onNavigateToAnalyst
+                    onOpenModule = onNavigateToAnalyst,
+                    onPinToRail = { onPinToRail(Screen.ANALYST) },
+                    isPinned = pinnedRailScreens.contains(Screen.ANALYST)
                 )
             }
 
             // SCEAU Card: Cryptographic Suite (VERISIN + KEYCORE)
             item {
                 SceauQuickCard(
-                    onOpenModule = onNavigateToSceau
+                    onOpenModule = onNavigateToSceau,
+                    onPinToRail = { onPinToRail(Screen.SCEAU) },
+                    isPinned = pinnedRailScreens.contains(Screen.SCEAU)
                 )
             }
 
             // SIGNALAB Card: IMG Signer & Recompilation LABOUT
             item {
                 SignalabQuickCard(
-                    onOpenModule = onNavigateToSignalab
+                    onOpenModule = onNavigateToSignalab,
+                    onPinToRail = { onPinToRail(Screen.SIGNALAB) },
+                    isPinned = pinnedRailScreens.contains(Screen.SIGNALAB)
+                )
+            }
+
+            // GESTIONNAIRE DE FICHIERS Card: Stockage Interne & Workspace Projets
+            item {
+                FileManagerQuickCard(
+                    onOpenModule = onNavigateToFileManager,
+                    onPinToRail = { onPinToRail(Screen.FILE_MANAGER) },
+                    isPinned = pinnedRailScreens.contains(Screen.FILE_MANAGER)
                 )
             }
 
@@ -1193,12 +1220,30 @@ private fun getIconForApp(key: String): ImageVector {
 @Composable
 fun UnpackRepackQuickCard(
     onOpenModule: () -> Unit,
+    onPinToRail: (() -> Unit)? = null,
+    isPinned: Boolean = false,
     modifier: Modifier = Modifier
 ) {
+    var dragOffsetX by remember { mutableFloatStateOf(0f) }
     ElevatedCard(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures(
+                    onDragEnd = {
+                        if (dragOffsetX < -80f && onPinToRail != null) {
+                            onPinToRail()
+                        }
+                        dragOffsetX = 0f
+                    },
+                    onDragCancel = { dragOffsetX = 0f },
+                    onHorizontalDrag = { change, dragAmount ->
+                        change.consume()
+                        dragOffsetX += dragAmount
+                    }
+                )
+            }
             .clickable(onClick = onOpenModule)
             .testTag("home_unpack_repack_card"),
         shape = RoundedCornerShape(16.dp),
@@ -1241,19 +1286,37 @@ fun UnpackRepackQuickCard(
                 )
             }
 
-            Button(
-                onClick = onOpenModule,
-                shape = RoundedCornerShape(10.dp),
-                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                modifier = Modifier.height(36.dp)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Text("Ouvrir", style = MaterialTheme.typography.labelMedium)
-                Spacer(modifier = Modifier.width(4.dp))
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                    contentDescription = null,
-                    modifier = Modifier.size(14.dp)
-                )
+                if (onPinToRail != null) {
+                    IconButton(
+                        onClick = onPinToRail,
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ViewSidebar,
+                            contentDescription = if (isPinned) "Retirer du rail" else "Épingler au rail",
+                            tint = if (isPinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+                Button(
+                    onClick = onOpenModule,
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                    modifier = Modifier.height(36.dp)
+                ) {
+                    Text("Ouvrir", style = MaterialTheme.typography.labelMedium)
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
             }
         }
     }
@@ -1262,12 +1325,30 @@ fun UnpackRepackQuickCard(
 @Composable
 fun ExtractorQuickCard(
     onOpenModule: () -> Unit,
+    onPinToRail: (() -> Unit)? = null,
+    isPinned: Boolean = false,
     modifier: Modifier = Modifier
 ) {
+    var dragOffsetX by remember { mutableFloatStateOf(0f) }
     ElevatedCard(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures(
+                    onDragEnd = {
+                        if (dragOffsetX < -80f && onPinToRail != null) {
+                            onPinToRail()
+                        }
+                        dragOffsetX = 0f
+                    },
+                    onDragCancel = { dragOffsetX = 0f },
+                    onHorizontalDrag = { change, dragAmount ->
+                        change.consume()
+                        dragOffsetX += dragAmount
+                    }
+                )
+            }
             .clickable(onClick = onOpenModule)
             .testTag("home_extractor_card"),
         shape = RoundedCornerShape(16.dp),
@@ -1317,19 +1398,37 @@ fun ExtractorQuickCard(
                 }
             }
 
-            Button(
-                onClick = onOpenModule,
-                shape = RoundedCornerShape(10.dp),
-                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                modifier = Modifier.height(36.dp)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Text("Ouvrir", style = MaterialTheme.typography.labelMedium)
-                Spacer(modifier = Modifier.width(4.dp))
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                    contentDescription = null,
-                    modifier = Modifier.size(14.dp)
-                )
+                if (onPinToRail != null) {
+                    IconButton(
+                        onClick = onPinToRail,
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ViewSidebar,
+                            contentDescription = if (isPinned) "Retirer du rail" else "Épingler au rail",
+                            tint = if (isPinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+                Button(
+                    onClick = onOpenModule,
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                    modifier = Modifier.height(36.dp)
+                ) {
+                    Text("Ouvrir", style = MaterialTheme.typography.labelMedium)
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
             }
         }
     }
@@ -1338,12 +1437,30 @@ fun ExtractorQuickCard(
 @Composable
 fun GemeauQuickCard(
     onOpenModule: () -> Unit,
+    onPinToRail: (() -> Unit)? = null,
+    isPinned: Boolean = false,
     modifier: Modifier = Modifier
 ) {
+    var dragOffsetX by remember { mutableFloatStateOf(0f) }
     ElevatedCard(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures(
+                    onDragEnd = {
+                        if (dragOffsetX < -80f && onPinToRail != null) {
+                            onPinToRail()
+                        }
+                        dragOffsetX = 0f
+                    },
+                    onDragCancel = { dragOffsetX = 0f },
+                    onHorizontalDrag = { change, dragAmount ->
+                        change.consume()
+                        dragOffsetX += dragAmount
+                    }
+                )
+            }
             .clickable(onClick = onOpenModule)
             .testTag("home_gemeau_card"),
         shape = RoundedCornerShape(16.dp),
@@ -1393,19 +1510,37 @@ fun GemeauQuickCard(
                 }
             }
 
-            Button(
-                onClick = onOpenModule,
-                shape = RoundedCornerShape(10.dp),
-                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                modifier = Modifier.height(36.dp)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Text("Ouvrir", style = MaterialTheme.typography.labelMedium)
-                Spacer(modifier = Modifier.width(4.dp))
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                    contentDescription = null,
-                    modifier = Modifier.size(14.dp)
-                )
+                if (onPinToRail != null) {
+                    IconButton(
+                        onClick = onPinToRail,
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ViewSidebar,
+                            contentDescription = if (isPinned) "Retirer du rail" else "Épingler au rail",
+                            tint = if (isPinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+                Button(
+                    onClick = onOpenModule,
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                    modifier = Modifier.height(36.dp)
+                ) {
+                    Text("Ouvrir", style = MaterialTheme.typography.labelMedium)
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
             }
         }
     }
@@ -1414,12 +1549,30 @@ fun GemeauQuickCard(
 @Composable
 fun AnalystQuickCard(
     onOpenModule: () -> Unit,
+    onPinToRail: (() -> Unit)? = null,
+    isPinned: Boolean = false,
     modifier: Modifier = Modifier
 ) {
+    var dragOffsetX by remember { mutableFloatStateOf(0f) }
     ElevatedCard(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures(
+                    onDragEnd = {
+                        if (dragOffsetX < -80f && onPinToRail != null) {
+                            onPinToRail()
+                        }
+                        dragOffsetX = 0f
+                    },
+                    onDragCancel = { dragOffsetX = 0f },
+                    onHorizontalDrag = { change, dragAmount ->
+                        change.consume()
+                        dragOffsetX += dragAmount
+                    }
+                )
+            }
             .clickable(onClick = onOpenModule)
             .testTag("home_analyst_card"),
         shape = RoundedCornerShape(16.dp),
@@ -1469,19 +1622,37 @@ fun AnalystQuickCard(
                 }
             }
 
-            Button(
-                onClick = onOpenModule,
-                shape = RoundedCornerShape(10.dp),
-                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                modifier = Modifier.height(36.dp)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Text("Ouvrir", style = MaterialTheme.typography.labelMedium)
-                Spacer(modifier = Modifier.width(4.dp))
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                    contentDescription = null,
-                    modifier = Modifier.size(14.dp)
-                )
+                if (onPinToRail != null) {
+                    IconButton(
+                        onClick = onPinToRail,
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ViewSidebar,
+                            contentDescription = if (isPinned) "Retirer du rail" else "Épingler au rail",
+                            tint = if (isPinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+                Button(
+                    onClick = onOpenModule,
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                    modifier = Modifier.height(36.dp)
+                ) {
+                    Text("Ouvrir", style = MaterialTheme.typography.labelMedium)
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
             }
         }
     }
@@ -1732,12 +1903,30 @@ fun VerisinQuickCard(
 @Composable
 fun SceauQuickCard(
     onOpenModule: () -> Unit,
+    onPinToRail: (() -> Unit)? = null,
+    isPinned: Boolean = false,
     modifier: Modifier = Modifier
 ) {
+    var dragOffsetX by remember { mutableFloatStateOf(0f) }
     ElevatedCard(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures(
+                    onDragEnd = {
+                        if (dragOffsetX < -80f && onPinToRail != null) {
+                            onPinToRail()
+                        }
+                        dragOffsetX = 0f
+                    },
+                    onDragCancel = { dragOffsetX = 0f },
+                    onHorizontalDrag = { change, dragAmount ->
+                        change.consume()
+                        dragOffsetX += dragAmount
+                    }
+                )
+            }
             .clickable(onClick = onOpenModule)
             .testTag("home_sceau_card"),
         shape = RoundedCornerShape(16.dp),
@@ -1787,19 +1976,37 @@ fun SceauQuickCard(
                 }
             }
 
-            Button(
-                onClick = onOpenModule,
-                shape = RoundedCornerShape(10.dp),
-                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                modifier = Modifier.height(36.dp)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Text("Ouvrir", style = MaterialTheme.typography.labelMedium)
-                Spacer(modifier = Modifier.width(4.dp))
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                    contentDescription = null,
-                    modifier = Modifier.size(14.dp)
-                )
+                if (onPinToRail != null) {
+                    IconButton(
+                        onClick = onPinToRail,
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ViewSidebar,
+                            contentDescription = if (isPinned) "Retirer du rail" else "Épingler au rail",
+                            tint = if (isPinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+                Button(
+                    onClick = onOpenModule,
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                    modifier = Modifier.height(36.dp)
+                ) {
+                    Text("Ouvrir", style = MaterialTheme.typography.labelMedium)
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
             }
         }
     }
@@ -1808,12 +2015,30 @@ fun SceauQuickCard(
 @Composable
 fun SignalabQuickCard(
     onOpenModule: () -> Unit,
+    onPinToRail: (() -> Unit)? = null,
+    isPinned: Boolean = false,
     modifier: Modifier = Modifier
 ) {
+    var dragOffsetX by remember { mutableFloatStateOf(0f) }
     ElevatedCard(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures(
+                    onDragEnd = {
+                        if (dragOffsetX < -80f && onPinToRail != null) {
+                            onPinToRail()
+                        }
+                        dragOffsetX = 0f
+                    },
+                    onDragCancel = { dragOffsetX = 0f },
+                    onHorizontalDrag = { change, dragAmount ->
+                        change.consume()
+                        dragOffsetX += dragAmount
+                    }
+                )
+            }
             .clickable(onClick = onOpenModule)
             .testTag("home_signalab_card"),
         shape = RoundedCornerShape(16.dp),
@@ -1865,19 +2090,151 @@ fun SignalabQuickCard(
                 }
             }
 
-            Button(
-                onClick = onOpenModule,
-                shape = RoundedCornerShape(10.dp),
-                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                modifier = Modifier.height(36.dp)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Text("Ouvrir", style = MaterialTheme.typography.labelMedium)
-                Spacer(modifier = Modifier.width(4.dp))
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                    contentDescription = null,
-                    modifier = Modifier.size(14.dp)
+                if (onPinToRail != null) {
+                    IconButton(
+                        onClick = onPinToRail,
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ViewSidebar,
+                            contentDescription = if (isPinned) "Retirer du rail" else "Épingler au rail",
+                            tint = if (isPinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+                Button(
+                    onClick = onOpenModule,
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                    modifier = Modifier.height(36.dp)
+                ) {
+                    Text("Ouvrir", style = MaterialTheme.typography.labelMedium)
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun FileManagerQuickCard(
+    onOpenModule: () -> Unit,
+    onPinToRail: (() -> Unit)? = null,
+    isPinned: Boolean = false,
+    modifier: Modifier = Modifier
+) {
+    var dragOffsetX by remember { mutableFloatStateOf(0f) }
+    ElevatedCard(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures(
+                    onDragEnd = {
+                        if (dragOffsetX < -80f && onPinToRail != null) {
+                            onPinToRail()
+                        }
+                        dragOffsetX = 0f
+                    },
+                    onDragCancel = { dragOffsetX = 0f },
+                    onHorizontalDrag = { change, dragAmount ->
+                        change.consume()
+                        dragOffsetX += dragAmount
+                    }
                 )
+            }
+            .clickable(onClick = onOpenModule)
+            .testTag("home_file_manager_card"),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+        ),
+        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(42.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.primaryContainer),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.FolderOpen,
+                        contentDescription = "Gestionnaire de Fichiers",
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(14.dp))
+
+                Column {
+                    Text(
+                        text = "Gestionnaire de Fichiers",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "Stockage Interne & Workspace Projets",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                if (onPinToRail != null) {
+                    IconButton(
+                        onClick = onPinToRail,
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ViewSidebar,
+                            contentDescription = if (isPinned) "Retirer du rail" else "Épingler au rail",
+                            tint = if (isPinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+                Button(
+                    onClick = onOpenModule,
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                    modifier = Modifier.height(36.dp)
+                ) {
+                    Text("Ouvrir", style = MaterialTheme.typography.labelMedium)
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
             }
         }
     }

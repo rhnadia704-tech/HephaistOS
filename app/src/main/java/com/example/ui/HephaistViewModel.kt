@@ -105,6 +105,15 @@ data class HephaistUiState(
     val verisinResult: VerisinEngine.VerisinResult? = null,
     val verisinError: String? = null,
     val verisinAvailableApks: List<File> = emptyList(),
+    val pinnedRailScreens: List<Screen> = listOf(
+        Screen.UNPACK_REPACK,
+        Screen.EXTRACTOR,
+        Screen.GEMEAU,
+        Screen.ANALYST,
+        Screen.SCEAU,
+        Screen.SIGNALAB,
+        Screen.FILE_MANAGER
+    ),
     val snackbarMessage: String? = null
 )
 
@@ -112,6 +121,30 @@ class HephaistViewModel(application: Application) : AndroidViewModel(application
 
     private val _uiState = MutableStateFlow(HephaistUiState())
     val uiState: StateFlow<HephaistUiState> = _uiState.asStateFlow()
+
+    fun pinScreenToRail(screen: Screen) {
+        if (!_uiState.value.pinnedRailScreens.contains(screen)) {
+            _uiState.update { it.copy(pinnedRailScreens = it.pinnedRailScreens + screen) }
+            showSnackbar("${screen.title} a été épinglé au Rail latéral.")
+        }
+    }
+
+    fun unpinScreenFromRail(screen: Screen) {
+        val removableScreens = setOf(
+            Screen.UNPACK_REPACK,
+            Screen.EXTRACTOR,
+            Screen.GEMEAU,
+            Screen.ANALYST,
+            Screen.SCEAU,
+            Screen.SIGNALAB,
+            Screen.FILE_MANAGER
+        )
+        if (screen in removableScreens && _uiState.value.pinnedRailScreens.contains(screen)) {
+            _uiState.update { it.copy(pinnedRailScreens = it.pinnedRailScreens.filter { s -> s != screen }) }
+            showSnackbar("${screen.title} retiré du Rail.")
+        }
+    }
+
 
     init {
         loadInitialData()

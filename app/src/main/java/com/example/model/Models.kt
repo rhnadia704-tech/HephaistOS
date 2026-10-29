@@ -9,9 +9,11 @@ enum class Screen(val title: String) {
     SCEAU("Sceau"),
     SIGNALAB("Signalab"),
     VERISIN("Verisin"),
+    FILE_MANAGER("Gestionnaire de Fichiers"),
     AHE_EXTENSION("Extension .ahe"),
     SETTINGS("Paramètres")
 }
+
 
 enum class RailState {
     HIDDEN,

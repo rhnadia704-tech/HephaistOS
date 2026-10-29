@@ -47,6 +47,10 @@ import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.VerifiedUser
 import androidx.compose.material.icons.outlined.VpnKey
 import androidx.compose.material3.Icon
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -66,16 +70,28 @@ import androidx.compose.ui.unit.sp
 import com.example.model.RailState
 import com.example.model.Screen
 
+
 @Composable
 fun HephaistNavRail(
     currentScreen: Screen,
     railState: RailState,
     isPlusDrawerOpen: Boolean,
+    pinnedScreens: List<Screen> = listOf(
+        Screen.UNPACK_REPACK,
+        Screen.EXTRACTOR,
+        Screen.GEMEAU,
+        Screen.ANALYST,
+        Screen.SCEAU,
+        Screen.SIGNALAB,
+        Screen.FILE_MANAGER
+    ),
     onScreenSelected: (Screen) -> Unit,
+    onUnpinScreen: (Screen) -> Unit = {},
     onTogglePlusDrawer: () -> Unit,
     onToggleExpand: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+
     val isExpanded = railState == RailState.EXPANDED
     val targetWidth = when (railState) {
         RailState.HIDDEN -> 0.dp
@@ -176,6 +192,7 @@ fun HephaistNavRail(
                 Spacer(modifier = Modifier.height(20.dp))
 
                 // Navigation Items
+                // 1. Fixed Item: Accueil
                 NavRailItem(
                     label = "Accueil",
                     selected = currentScreen == Screen.HOME && !isPlusDrawerOpen,
@@ -188,78 +205,105 @@ fun HephaistNavRail(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                NavRailItem(
-                    label = "Unpack/Repack",
-                    selected = currentScreen == Screen.UNPACK_REPACK && !isPlusDrawerOpen,
-                    selectedIcon = Icons.Filled.Memory,
-                    unselectedIcon = Icons.Outlined.Memory,
-                    isExpanded = isExpanded,
-                    testTag = "nav_unpack_repack_button",
-                    onClick = { onScreenSelected(Screen.UNPACK_REPACK) }
-                )
+                // 2. Dynamic Pinned Items (long-press to unpin)
+                for (screen in pinnedScreens) {
+                    when (screen) {
+                        Screen.UNPACK_REPACK -> {
+                            NavRailItem(
+                                label = "Unpack/Repack",
+                                selected = currentScreen == Screen.UNPACK_REPACK && !isPlusDrawerOpen,
+                                selectedIcon = Icons.Filled.Memory,
+                                unselectedIcon = Icons.Outlined.Memory,
+                                isExpanded = isExpanded,
+                                testTag = "nav_unpack_repack_button",
+                                onClick = { onScreenSelected(Screen.UNPACK_REPACK) },
+                                onLongClick = { onUnpinScreen(Screen.UNPACK_REPACK) }
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+                        Screen.EXTRACTOR -> {
+                            NavRailItem(
+                                label = "Extractor",
+                                selected = currentScreen == Screen.EXTRACTOR && !isPlusDrawerOpen,
+                                selectedIcon = Icons.Filled.Build,
+                                unselectedIcon = Icons.Outlined.Build,
+                                isExpanded = isExpanded,
+                                testTag = "nav_extractor_button",
+                                onClick = { onScreenSelected(Screen.EXTRACTOR) },
+                                onLongClick = { onUnpinScreen(Screen.EXTRACTOR) }
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+                        Screen.GEMEAU -> {
+                            NavRailItem(
+                                label = "Géméau",
+                                selected = currentScreen == Screen.GEMEAU && !isPlusDrawerOpen,
+                                selectedIcon = Icons.Filled.VpnKey,
+                                unselectedIcon = Icons.Outlined.VpnKey,
+                                isExpanded = isExpanded,
+                                testTag = "nav_gemeau_button",
+                                onClick = { onScreenSelected(Screen.GEMEAU) },
+                                onLongClick = { onUnpinScreen(Screen.GEMEAU) }
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+                        Screen.ANALYST -> {
+                            NavRailItem(
+                                label = "Analyst",
+                                selected = currentScreen == Screen.ANALYST && !isPlusDrawerOpen,
+                                selectedIcon = Icons.Filled.Analytics,
+                                unselectedIcon = Icons.Outlined.Analytics,
+                                isExpanded = isExpanded,
+                                testTag = "nav_analyst_button",
+                                onClick = { onScreenSelected(Screen.ANALYST) },
+                                onLongClick = { onUnpinScreen(Screen.ANALYST) }
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+                        Screen.SCEAU -> {
+                            NavRailItem(
+                                label = "SCEAU",
+                                selected = (currentScreen == Screen.SCEAU || currentScreen == Screen.VERISIN) && !isPlusDrawerOpen,
+                                selectedIcon = Icons.Filled.Security,
+                                unselectedIcon = Icons.Outlined.Security,
+                                isExpanded = isExpanded,
+                                testTag = "nav_sceau_button",
+                                onClick = { onScreenSelected(Screen.SCEAU) },
+                                onLongClick = { onUnpinScreen(Screen.SCEAU) }
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+                        Screen.SIGNALAB -> {
+                            NavRailItem(
+                                label = "Signalab",
+                                selected = currentScreen == Screen.SIGNALAB && !isPlusDrawerOpen,
+                                selectedIcon = Icons.Filled.AutoFixHigh,
+                                unselectedIcon = Icons.Outlined.AutoFixHigh,
+                                isExpanded = isExpanded,
+                                testTag = "nav_signalab_button",
+                                onClick = { onScreenSelected(Screen.SIGNALAB) },
+                                onLongClick = { onUnpinScreen(Screen.SIGNALAB) }
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+                        Screen.FILE_MANAGER -> {
+                            NavRailItem(
+                                label = "Fichiers",
+                                selected = currentScreen == Screen.FILE_MANAGER && !isPlusDrawerOpen,
+                                selectedIcon = Icons.Filled.FolderOpen,
+                                unselectedIcon = Icons.Outlined.FolderOpen,
+                                isExpanded = isExpanded,
+                                testTag = "nav_file_manager_button",
+                                onClick = { onScreenSelected(Screen.FILE_MANAGER) },
+                                onLongClick = { onUnpinScreen(Screen.FILE_MANAGER) }
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+                        else -> {}
+                    }
+                }
 
-                Spacer(modifier = Modifier.height(8.dp))
-
-                NavRailItem(
-                    label = "Extractor",
-                    selected = currentScreen == Screen.EXTRACTOR && !isPlusDrawerOpen,
-                    selectedIcon = Icons.Filled.Build,
-                    unselectedIcon = Icons.Outlined.Build,
-                    isExpanded = isExpanded,
-                    testTag = "nav_extractor_button",
-                    onClick = { onScreenSelected(Screen.EXTRACTOR) }
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                NavRailItem(
-                    label = "Géméau",
-                    selected = currentScreen == Screen.GEMEAU && !isPlusDrawerOpen,
-                    selectedIcon = Icons.Filled.VpnKey,
-                    unselectedIcon = Icons.Outlined.VpnKey,
-                    isExpanded = isExpanded,
-                    testTag = "nav_gemeau_button",
-                    onClick = { onScreenSelected(Screen.GEMEAU) }
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                NavRailItem(
-                    label = "Analyst",
-                    selected = currentScreen == Screen.ANALYST && !isPlusDrawerOpen,
-                    selectedIcon = Icons.Filled.Analytics,
-                    unselectedIcon = Icons.Outlined.Analytics,
-                    isExpanded = isExpanded,
-                    testTag = "nav_analyst_button",
-                    onClick = { onScreenSelected(Screen.ANALYST) }
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                NavRailItem(
-                    label = "SCEAU",
-                    selected = (currentScreen == Screen.SCEAU || currentScreen == Screen.VERISIN) && !isPlusDrawerOpen,
-                    selectedIcon = Icons.Filled.Security,
-                    unselectedIcon = Icons.Outlined.Security,
-                    isExpanded = isExpanded,
-                    testTag = "nav_sceau_button",
-                    onClick = { onScreenSelected(Screen.SCEAU) }
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                NavRailItem(
-                    label = "Signalab",
-                    selected = currentScreen == Screen.SIGNALAB && !isPlusDrawerOpen,
-                    selectedIcon = Icons.Filled.AutoFixHigh,
-                    unselectedIcon = Icons.Outlined.AutoFixHigh,
-                    isExpanded = isExpanded,
-                    testTag = "nav_signalab_button",
-                    onClick = { onScreenSelected(Screen.SIGNALAB) }
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
+                // 3. Fixed Item: Paramètres
                 NavRailItem(
                     label = "Paramètres",
                     selected = currentScreen == Screen.SETTINGS && !isPlusDrawerOpen,
@@ -269,6 +313,7 @@ fun HephaistNavRail(
                     testTag = "nav_settings_button",
                     onClick = { onScreenSelected(Screen.SETTINGS) }
                 )
+
 
                 Spacer(modifier = Modifier.height(14.dp))
 
@@ -286,6 +331,7 @@ fun HephaistNavRail(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun NavRailItem(
     label: String,
@@ -294,7 +340,8 @@ private fun NavRailItem(
     unselectedIcon: ImageVector,
     isExpanded: Boolean,
     testTag: String,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null
 ) {
     val bgColor by animateColorAsState(
         targetValue = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
@@ -306,11 +353,14 @@ private fun NavRailItem(
     )
 
     Surface(
-        onClick = onClick,
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .testTag(testTag),
+            .testTag(testTag)
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            ),
         color = bgColor,
         shape = RoundedCornerShape(16.dp)
     ) {

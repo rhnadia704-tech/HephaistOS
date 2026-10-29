@@ -1,60 +1,140 @@
-# Plan d'Implémentation REPACKORE dans SIGNALAB — STATUT : TERMINÉ & VALIDÉ
+# Refonte Souveraine : Moteur UNPACK/REPACK Unifié, Migration du Workspace & Gestionnaire de Fichiers (Révisé)
 
-## 1. Objectif & Contexte
-
-Le problème initial résidait dans le fait que lors de la phase finale de repack, le système s'appuyait sur une copie passive de l'image brute de départ, ignorant les fichiers résignés présents dans `sdcard/HEPHAISTOS/UNPACKED/<partition>/`.
-
-Pour résoudre définitivement ce problème, nous avons créé **REPACKORE** : un moteur souverain de reconstruction de partitions capable d'analyser en profondeur l'intégralité du dossier `UNPACKED/` et de synthétiser de zéro une véritable image de partition (EXT4, EROFS, Sparse ou ZIP) contenant directement les nouveaux octets des APKs résignés, avec application des contextes SELinux et un dimensionnement dynamique (+10% de marge de sécurité).
+Refonte complète du cycle de décompaction et recompilation d'HephaistOS pour éliminer définitivement les lenteurs de l'injection sectorielle, migration du stockage de travail vers le répertoire interne haute performance (`context.filesDir/workspace`), affichage du Gestionnaire de Fichiers sur l'accueil avec double racine (Stockage Interne & Workspace applicatif structuré), et personnalisation dynamique du Navigation Rail (drag-and-drop et appui long).
 
 ---
 
-## 2. Architecture de REPACKORE (`RepackoreEngine.kt`) — [RÉALISÉE & OPÉRATIONNELLE]
+## User Review & Critical Decisions
 
-### Phase 1 : Introspection & Analyse de Schéma du Répertoire `UNPACKED/`
-- Parcours complet et récursif du dossier `UNPACKED/<partition>/` :
-  - Détection de chaque fichier régulier, sous-dossier, lien symbolique (`symlinks.txt`).
-  - Lecture des contextes de sécurité SELinux (`file_contexts`, `fs_config`, xattrs).
-  - Calcul de la taille nette requise pour les données réelles (en intégrant les nouveaux APKs résignés).
-- **Dimensionnement Dynamique** :
-  - Calcul du nombre de blocs nécessaires (taille de bloc standard : 4096 octets).
-  - Ajout d'une marge de sécurité de **10%** pour l'espace libre de travail et les structures de gestion.
+> [!IMPORTANT]
+> Les décisions critiques validées et complétées sont intégrées comme principes cardinaux :
 
-### Phase 2 : Synthèse & Compilation Active de Partition
-- **Reconstruction EXT4 Autonome** :
-  - Écriture de l'en-tête du superbloc (Magic `0xEF53` à l'offset 1024, révision, descripteurs de blocs et d'inodes).
-  - Allocation linéaire et sectorielle.
-  - Écriture et remplacement des secteurs de chaque application modifiée avec détection et calage des en-têtes `PK\u0003\u0004`.
-- **Reconstruction EROFS Autonome** :
-  - Écriture du superbloc EROFS (Magic `0xE0F5E1E2`).
-- **Convertisseur Android Sparse Image (`img2simg`)** :
-  - Encodage en format sparse avec en-têtes chunks `0xCAC1` et magic `0xED26FF3A`.
-- **Archive ZIP / OTA** :
-  - Reconstitution d'archive compressée standard si le format de départ était un ZIP.
-
-> **Règle absolue respectée** : Zéro copie de bloc d'origine. Chaque bloc de l'image finale dans `LABOUT/` reflète les modifications actives du répertoire `UNPACKED/`.
-
-### Phase 3 : Audit Cryptographique Post-Compilation Automatique
-- Dès que l'image est écrite dans `/sdcard/HEPHAISTOS/SIGNER/LABOUT/<nom_partition>_resigned.img` :
-  - Extraction de contrôle d'un APK directement depuis l'image produite.
-  - Audit immédiat avec `VerisinEngine.verifyApkFile`.
-  - Certification et journalisation formelle de l'empreinte SHA-256 du certificat et du Subject DN.
+- **Accueil du Gestionnaire de Fichiers avec Double Racine** :
+  - **Décision confirmée** : L'accueil du Gestionnaire de Fichiers présente une liste d'accès claire :
+    1. **Stockage Interne** (`/storage/emulated/0`) : Accès aux fichiers du téléphone, cartes SD, téléchargements et dossiers publics `/sdcard/HEPHAISTOS/PACKED/`.
+    2. **Workspace (Espace de travail applicatif)** (`context.filesDir/workspace`) : Arborescence structurée permettant d'explorer directement chaque projet décompacté (`UNPACKED/<nom_projet>`), ses fichiers extraits, ses APKs, et ses métadonnées de scan (`Data/Signalab/`).
+- **Migration du Workspace de Travail (`context.filesDir/workspace`)** :
+  - **Décision confirmée** : Tous les décompactages (`UNPACKED/`), métadonnées et fichiers de staging sont désormais hébergés dans le stockage interne de l'application.
+  - **Bénéfices immédiats** : Élimination totale des erreurs de liens symboliques (`can't link`), contournement des limitations FUSE/FAT d'Android sur la carte SD, et vitesse d'E/S décuplée.
+  - **Sortie publique préservée** : Le dossier `/sdcard/HEPHAISTOS/PACKED/` (et `LABOUT/`) reste le lieu de livraison final des ROMs compilées.
+- **Suppression Définitive de l'Injection Sectorielle** :
+  - **Décision confirmée** : Zéro scan répétitif d'image brute. Recompilation directe, propre et instantanée à partir des fichiers modifiés et résignés dans le dossier `UNPACKED/`.
+- **Navigation Rail Dynamique & Personnalisable** :
+  - **Décision confirmée** : Glisser-déposer (drag-and-drop) d'une tuile de l'accueil vers le Rail latéral pour l'épingler ; appui long sur un élément du rail pour le détacher (applicable aux éléments synchronisés avec l'accueil).
 
 ---
 
-## 3. Réalisations & Validations
+## 1. Vue d'Ensemble & Objectifs
 
-1. **`RepackoreEngine.kt`** :
-   - Moteur complet d'introspection, d'allocation linéaire, de synthèse de partitions EXT4/EROFS/ZIP/Sparse et d'audit cryptographique post-compilation.
-2. **`SignalabEngine.kt`** :
-   - Élimination des routines de copie passive. Appel direct de `RepackoreEngine.compilePartitionImage` suivi de `RepackoreEngine.verifyCompiledImageSignatures`.
-3. **`UkaEngine.kt`** :
-   - Détection des fichiers décompactés/modifiés et aiguillage autonome vers `RepackoreEngine.assembleAutonomousExt4Image` pour empêcher toute réplication brute non désirée.
-4. **`SignalabScreen.kt`** :
-   - Ajout du badge souverain `"REPACKORE • Synthèse & Signatures Certifiées"` et de la confirmation d'audit dans la carte de résultat final.
-5. **Tests Unitaires Robolectric (`RepackoreEngineTest.kt`)** :
-   - `testInspectUnpackedSchemaDynamicMargin` : Testé & Validé (marge dynamique +10%).
-   - `testCompilePartitionImageZipWithResignedApk` : Testé & Validé (archive compilée avec nouvel APK résigné et vérifiée).
-   - `testAssembleAutonomousExt4Image` : Testé & Validé (superbloc EXT4 `0xEF53` validé à l'offset 1080 et audit de signatures réussi).
-6. **Compilations & Tests Globaux** :
-   - `gradle :app:testDebugUnitTest` : **BUILD SUCCESSFUL** (34/34 tâches validées).
-   - `compile_applet` : **Build succeeded**.
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                             HEPHAISTOS PIPELINE                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   [Source ROM / IMG / ZIP sélectionnée via Gestionnaire]                    │
+│              │                                                              │
+│              ▼                                                              │
+│   ┌───────────────────────────────────┐                                     │
+│   │   UNPACK STRUCTURÉ HAUT DÉBIT     │ ──▶ Enregistrement enrichi :        │
+│   │   (context.filesDir/workspace/)   │     • symlinks.txt                  │
+│   └───────────────────────────────────┘     • fs_config & file_contexts     │
+│              │                              • partition_blueprint.json      │
+│              ▼                              • inodes_manifest.json          │
+│   ┌───────────────────────────────────┐                                     │
+│   │   SCAN & RESIGNATION (SCEAU)      │                                     │
+│   │   (Mise à jour directe UNPACKED)  │                                     │
+│   └───────────────────────────────────┘                                     │
+│              │                                                              │
+│              ▼                                                              │
+│   ┌───────────────────────────────────┐                                     │
+│   │   REPACK DIRECT & SOUVERAIN       │ ──▶ ZÉRO INJECTION SECTORIELLE      │
+│   │   (Compilation directe du dossier)│     Reconstruction native propre    │
+│   └───────────────────────────────────┘                                     │
+│              │                                                              │
+│              ▼                                                              │
+│   [Sortie Finale : /sdcard/HEPHAISTOS/PACKED/ & LABOUT/]                    │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 2. Expérience Utilisateur & Design
+
+### 1. Gestionnaire de Fichiers Réinventé
+- **Vue Racine / Accueil du Gestionnaire** :
+  - **Section Stockage Interne** : Carte dédiée avec barre de jauge d'espace libre, icône disque/téléphone, accès immédiat à `/storage/emulated/0` et aux répertoires de téléchargement/ROMs.
+  - **Section Workspace (Données de l'Application)** : Carte dédiée avec badge "Haute Performance", accès direct aux projets décompactés :
+    - `UNPACKED/` : Liste de chaque projet avec nom de partition, nombre de fichiers et taille.
+    - `Data/Signalab/` : Rapports de scan cryptographiques, JSONs de signatures et de correspondances.
+    - `KEYS/` : Trousseau de clés locales forgées.
+- **Navigation et Actions** :
+  - Fil d'Ariane dynamique (Breadcrumb) permettant de basculer instantanément entre le Stockage Interne et le Workspace.
+  - Options contextuelles : Sélection directe de partition, visualisation rapide d'APK ou fichier texte, copie vers la carte SD.
+
+### 2. Navigation Rail Dynamique (Accueil)
+- Glisser-déposer fluide d'une carte de fonctionnalité de l'accueil vers la bordure gauche pour l'épingler dans le Rail.
+- Appui long sur une icône du Rail pour afficher un popover de détachement ou la retirer instantanément.
+
+---
+
+## 3. Décisions d'Architecture & Stratégie Technique
+
+### Décision 1 : `WorkspaceManager` Unifié & Structure du Workspace
+- `context.filesDir.resolve("workspace")` :
+  - `workspace/UNPACKED/<target_name>/` : Répertoire d'extraction principal (support natif des symlinks sans contrainte FUSE).
+  - `workspace/Data/` : Blueprints, arborescences JSON et métadonnées d'inodes.
+  - `workspace/KEYS/` : Trousseaux de clés privées et certificats.
+- Méthode `WorkspaceManager.getRootLocations(context)` retournant :
+  - `StorageRoot("Stockage Interne", File("/storage/emulated/0"), icon)`
+  - `StorageRoot("Workspace", context.filesDir.resolve("workspace"), icon)`
+
+### Décision 2 : Suppression Radicale de l'Injection Sectorielle
+- Remplacement du scan répétitif d'image de 4 Go par :
+  - Pour les archives **ZIP / OTA** : Streaming direct depuis `UNPACKED/` vers le fichier cible final dans `PACKED/` ou `LABOUT/`.
+  - Pour les partitions **EXT4 / EROFS** : Appel des utilitaires système natifs (`make_ext4fs`, `mkfs.erofs`) ciblant directement le dossier `UNPACKED/`, ou synthèse séquentielle propre à partir de l'arborescence, garantissant que **seuls les éléments de `UNPACKED/` sont packés**.
+
+---
+
+## 4. Architecture des Composants & Modules
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                          COUCHE DONNÉES / DATA                         │
+├────────────────────────────────────────────────────────────────────────┤
+│ • WorkspaceManager.kt     : getWorkspaceDir(), getInternalUnpackDir(), │
+│                             getRootLocations(context)                  │
+│ • RepackoreEngine.kt      : Moteur de compilation directe sans scan     │
+│ • UkaEngine.kt            : Extraction & repack redirigés vers         │
+│                             l'espace interne rapide                    │
+│ • SignalabEngine.kt       : Pipeline complet aligné sur le workspace   │
+├────────────────────────────────────────────────────────────────────────┤
+│                          COUCHE VUE / UI                               │
+├────────────────────────────────────────────────────────────────────────┤
+│ • HomeScreen.kt           : Tuile Gestionnaire, drag/drop vers Rail    │
+│ • NavigationRail.kt       : Épinglage et appui long pour retirer       │
+│ • FileManagerScreen.kt    : Vue accueil à 2 racines (Stockage/Workspace)│
+│ • SignalabScreen.kt       : Suivi de compilation fluide sans blocage   │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 5. Plan d'Exécution par Étapes
+
+1. **`WorkspaceManager.kt` & Modèle des Racines** :
+   - Mise à jour pour structurer le workspace dans `context.filesDir/workspace`.
+   - Fourniture des deux racines d'accès : Stockage Interne & Workspace.
+2. **Refonte de `RepackoreEngine.kt`** :
+   - Suppression totale des boucles de scan d'APK dans les images brutes.
+   - Compilation directe à partir de `unpackedDir`.
+3. **Mise à Jour de `SignalabEngine.kt` & `UkaEngine.kt`** :
+   - Redirection de l'unpack vers le workspace interne rapide.
+   - Sauvegarde enrichie des configurations (`fs_config`, `file_contexts`, `symlinks.txt`).
+4. **Gestionnaire de Fichiers & Navigation Rail** :
+   - Écran du gestionnaire avec les 2 sections d'accueil : Stockage Interne et Workspace.
+   - Ajout de la tuile Gestionnaire sur l'accueil (`HomeScreen.kt`).
+   - Implémentation du drag-and-drop vers le Rail et appui long pour détacher.
+5. **Vérification & Validation** :
+   - Tests unitaires Robolectric (`RepackoreEngineTest.kt`).
+   - Compilation complète de l'applet (`compile_applet`).

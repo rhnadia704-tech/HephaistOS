@@ -72,6 +72,7 @@ import com.example.ui.components.PlusDrawer
 import com.example.ui.screens.AheDynamicScreen
 import com.example.ui.screens.AnalystScreen
 import com.example.ui.screens.ExtractorScreen
+import com.example.ui.screens.FileManagerScreen
 import com.example.ui.screens.GemeauScreen
 import com.example.ui.screens.HomeScreen
 import com.example.model.SceauSubScreen
@@ -242,12 +243,16 @@ class MainActivity : ComponentActivity() {
                             HephaistNavRail(
                                 currentScreen = uiState.currentScreen,
                                 railState = uiState.railState,
+                                pinnedScreens = uiState.pinnedRailScreens,
                                 isPlusDrawerOpen = uiState.isPlusDrawerOpen,
                                 onScreenSelected = { screen ->
                                     if (uiState.isFullConsoleMode) {
                                         viewModel.exitFullConsoleMode()
                                     }
                                     viewModel.selectScreen(screen)
+                                },
+                                onUnpinScreen = { screen ->
+                                    viewModel.unpinScreenFromRail(screen)
                                 },
                                 onTogglePlusDrawer = {
                                     viewModel.togglePlusDrawer()
@@ -290,6 +295,7 @@ class MainActivity : ComponentActivity() {
                                                 compatibleApps = uiState.compatibleApps,
                                                 installedExtensions = uiState.aheUiState.installedExtensions,
                                                 railState = uiState.railState,
+                                                pinnedRailScreens = uiState.pinnedRailScreens,
                                                 onToggleRailFullscreen = {
                                                     viewModel.toggleRailFullscreen()
                                                 },
@@ -321,6 +327,12 @@ class MainActivity : ComponentActivity() {
                                                 onNavigateToVerisin = {
                                                     viewModel.setSceauSubScreen(SceauSubScreen.VERISIN)
                                                     viewModel.selectScreen(Screen.SCEAU)
+                                                },
+                                                onNavigateToFileManager = {
+                                                    viewModel.selectScreen(Screen.FILE_MANAGER)
+                                                },
+                                                onPinToRail = { pinnedScreen ->
+                                                    viewModel.pinScreenToRail(pinnedScreen)
                                                 },
                                                 onOpenExtension = { ext ->
                                                     viewModel.openAheExtension(ext)
@@ -659,6 +671,25 @@ class MainActivity : ComponentActivity() {
                                                 },
                                                 onBack = {
                                                     viewModel.selectScreen(Screen.HOME)
+                                                }
+                                            )
+
+                                            Screen.FILE_MANAGER -> FileManagerScreen(
+                                                onBack = {
+                                                    viewModel.selectScreen(Screen.HOME)
+                                                },
+                                                onOpenInUnpack = { file ->
+                                                    viewModel.onSelectTargetFile(file)
+                                                    viewModel.selectScreen(Screen.UNPACK_REPACK)
+                                                },
+                                                onOpenInSignalab = { file ->
+                                                    viewModel.setSignalabFilePath(file.absolutePath)
+                                                    viewModel.selectScreen(Screen.SIGNALAB)
+                                                },
+                                                onOpenInVerisin = { file ->
+                                                    viewModel.runVerisinVerification(context, file.absolutePath)
+                                                    viewModel.setSceauSubScreen(SceauSubScreen.VERISIN)
+                                                    viewModel.selectScreen(Screen.SCEAU)
                                                 }
                                             )
                                         }

@@ -1,6 +1,6 @@
 {
-  "summary":  "Plan d'implémentation de REPACKORE entièrement complété et validé par des tests unitaires Robolectric et la compilation de l'applet.",
-  "updatedAt":  "2026-10-28T12:03:22.299727111Z",
+  "summary":  "Plan d'implémentation révisé intégrant la vue d'accueil du Gestionnaire de Fichiers structurée en 2 racines majeures (Stockage Interne et Workspace applicatif dédié aux projets décompactés), la refonte du moteur UNPACK/REPACK sans injection lente, et la personnalisation dynamique du Navigation Rail.",
+  "updatedAt":  "2026-10-29T07:40:06.100089446Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

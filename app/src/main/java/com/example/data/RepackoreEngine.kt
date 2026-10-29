@@ -395,127 +395,69 @@ object RepackoreEngine {
     ) {
         val totalBytes = schema.targetSizeWithMargin
 
-        onLog("[REPACKORE:ALLOCATION] Allocation d'un conteneur linéaire de ${formatSize(totalBytes)}...")
-
-        val sourceFile = File(blueprint.sourceFilePath)
-        var baseAllocated = false
-
-        // Si le fichier source original existe, dupliquons sa structure brute dans l'output avant d'injecter
-        if (sourceFile.exists() && sourceFile.length() > 4096L && !sourceFile.name.endsWith(".zip", ignoreCase = true)) {
-            try {
-                if (blueprint.containerFormat == "sparse_img") {
-                    UkaEngine.unsparseImage(sourceFile, outputFile)
-                } else {
-                    sourceFile.copyTo(outputFile, overwrite = true)
-                }
-                baseAllocated = true
-            } catch (_: Exception) {}
-        }
-
-        if (!baseAllocated) {
-            // Créer une structure de partition linéaire vierge
-            RandomAccessFile(outputFile, "rw").use { raf ->
-                raf.setLength(totalBytes)
-                // Écriture du Superbloc EXT4 standard à l'offset 1024
-                raf.seek(1024)
-                val sb = ByteBuffer.allocate(1024).order(ByteOrder.LITTLE_ENDIAN)
-                sb.putInt(schema.totalFiles) // s_inodes_count
-                sb.putInt((totalBytes / 4096).toInt()) // s_blocks_count_lo
-                sb.putInt(0) // r_blocks_count
-                sb.putInt(((totalBytes / 4096) - 100).toInt()) // free_blocks
-                sb.putInt(schema.totalFiles + 50) // free_inodes
-                sb.putInt(0) // first_data_block
-                sb.putInt(2) // log_block_size (4096)
-                sb.putInt(2) // log_cluster_size
-                sb.putInt(32768) // blocks_per_group
-                sb.putInt(32768) // clusters_per_group
-                sb.putInt(8192) // inodes_per_group
-                sb.putInt(0) // mtime
-                sb.putInt(System.currentTimeMillis().toInt() / 1000) // wtime
-                sb.putShort(1) // mnt_count
-                sb.putShort(20) // max_mnt_count
-                sb.putShort(EXT4_SUPER_MAGIC.toShort()) // s_magic (0xEF53)
-                sb.putShort(1) // s_state (clean)
-                sb.putShort(1) // s_errors (continue)
-                raf.write(sb.array())
-            }
-        }
-
-        // INJECTION VECTORIELLE DIRECTE DES APKS RÉSIGNÉS DANS L'IMAGE
-        onProgress("REPACKORE : Injection des APKs résignés dans les secteurs...", 0.60f)
-        val modifiedApks = schema.apks.filter { it.exists() }
-        onLog("[REPACKORE:INJECTION] Remplacement des secteurs pour ${modifiedApks.size} applications résignées...")
-
-        var injectedCount = 0
+        // Initialisation de la partition linéaire autonome directement depuis unpackedDir
         RandomAccessFile(outputFile, "rw").use { raf ->
-            val fileLength = raf.length()
-            val bufSize = 2 * 1024 * 1024
-            val buffer = ByteArray(bufSize)
+            raf.setLength(totalBytes)
 
-            for ((apkIdx, apkFile) in modifiedApks.withIndex()) {
-                val apkBytes = apkFile.readBytes()
-                val targetNameBytes = apkFile.name.toByteArray(Charsets.US_ASCII)
-                var searchOffset = 0L
-                var injectedThisApk = false
+            // Écriture du Superbloc EXT4 standard à l'offset 1024
+            raf.seek(1024)
+            val sb = ByteBuffer.allocate(1024).order(ByteOrder.LITTLE_ENDIAN)
+            sb.putInt(schema.totalFiles) // s_inodes_count
+            sb.putInt((totalBytes / 4096).toInt()) // s_blocks_count_lo
+            sb.putInt(0) // r_blocks_count
+            sb.putInt(((totalBytes / 4096) - 100).toInt()) // free_blocks
+            sb.putInt(schema.totalFiles + 50) // free_inodes
+            sb.putInt(0) // first_data_block
+            sb.putInt(2) // log_block_size (4096)
+            sb.putInt(2) // log_cluster_size
+            sb.putInt(32768) // blocks_per_group
+            sb.putInt(32768) // clusters_per_group
+            sb.putInt(8192) // inodes_per_group
+            sb.putInt(0) // mtime
+            sb.putInt((System.currentTimeMillis() / 1000).toInt()) // wtime
+            sb.putShort(1) // mnt_count
+            sb.putShort(20) // max_mnt_count
+            sb.putShort(EXT4_SUPER_MAGIC.toShort()) // s_magic (0xEF53)
+            sb.putShort(1) // s_state (clean)
+            sb.putShort(1) // s_errors (continue)
+            raf.write(sb.array())
 
-                onProgress("Injection dans l'image : ${apkFile.name} (${apkIdx + 1}/${modifiedApks.size})", 0.60f + (apkIdx.toFloat() / modifiedApks.size * 0.25f))
+            // STREAMING DIRECT & SÉQUENTIEL DE TOUS LES FICHIERS DE UNPACKED/ (ZÉRO INJECTION SECTORIELLE)
+            onProgress("REPACKORE : Recompilation directe des fichiers depuis UNPACKED/...", 0.50f)
+            val allFiles = unpackedDir.walkTopDown().filter { it.isFile }.toList()
+            onLog("[REPACKORE:ASSEMBLAGE] Écriture séquentielle directe de ${allFiles.size} fichier(s) décompactés...")
 
-                while (searchOffset < fileLength) {
-                    raf.seek(searchOffset)
-                    val bytesRead = raf.read(buffer)
-                    if (bytesRead <= targetNameBytes.size) break
+            // Début des blocs de données après les métadonnées EXT4 (offset 131 072 = bloc 32)
+            var currentBlockOffset = 32L * 4096L
+            val copyBuffer = ByteArray(64 * 1024)
 
-                    for (i in 0 until bytesRead - targetNameBytes.size) {
-                        var match = true
-                        for (j in targetNameBytes.indices) {
-                            if (buffer[i + j] != targetNameBytes[j]) {
-                                match = false
-                                break
-                            }
-                        }
-                        if (match) {
-                            val startPos = searchOffset + i
-                            val backSearchLimit = maxOf(0L, startPos - 128)
-                            raf.seek(backSearchLimit)
-                            val backBytes = ByteArray((startPos - backSearchLimit + 4).toInt())
-                            raf.readFully(backBytes)
-
-                            var pkOffset = -1L
-                            for (k in backBytes.size - 4 downTo 0) {
-                                if (backBytes[k] == 0x50.toByte() && backBytes[k + 1] == 0x4b.toByte() &&
-                                    backBytes[k + 2] == 0x03.toByte() && backBytes[k + 3] == 0x04.toByte()
-                                ) {
-                                    pkOffset = backSearchLimit + k
-                                    break
-                                }
-                            }
-
-                            if (pkOffset >= 0) {
-                                raf.seek(pkOffset)
-                                raf.write(apkBytes)
-                                injectedCount++
-                                injectedThisApk = true
-                                onLog("[REPACKORE] Secteur écrasé pour ${apkFile.name} à l'offset $pkOffset (${apkBytes.size} octets).")
-                                break
-                            }
-                        }
-                    }
-                    if (injectedThisApk) break
-                    searchOffset += bufSize - 1024
+            for ((idx, file) in allFiles.withIndex()) {
+                val progress = 0.50f + (idx.toFloat() / allFiles.size.coerceAtLeast(1) * 0.40f)
+                if (idx % 20 == 0 || idx == allFiles.size - 1) {
+                    onProgress("Recompilation : ${file.name} (${idx + 1}/${allFiles.size})", progress)
                 }
 
-                // Si l'APK n'était pas repéré dans l'image brute de départ, l'écrire à la fin dans un bloc vierge alloué
-                if (!injectedThisApk) {
-                    val appendOffset = (raf.length() + 4095L) / 4096L * 4096L
-                    raf.seek(appendOffset)
-                    raf.write(apkBytes)
-                    injectedCount++
-                    onLog("[REPACKORE] Bloc alloué et écrit pour ${apkFile.name} à l'offset $appendOffset.")
+                // Alignement au bloc de 4 Ko
+                currentBlockOffset = ((currentBlockOffset + 4095L) / 4096L) * 4096L
+                if (currentBlockOffset + file.length() >= totalBytes) {
+                    // Expansion dynamique de la taille si les fichiers dépassent
+                    val newLen = currentBlockOffset + file.length() + 8 * 1024 * 1024L
+                    raf.setLength(newLen)
+                }
+
+                raf.seek(currentBlockOffset)
+                FileInputStream(file).use { fis ->
+                    var r: Int
+                    while (fis.read(copyBuffer).also { r = it } > 0) {
+                        raf.write(copyBuffer, 0, r)
+                        currentBlockOffset += r
+                    }
                 }
             }
         }
 
-        onLog("[REPACKORE:INJECTION TERMINÉE] $injectedCount application(s) injectée(s) et confirmée(s) dans la partition !")
+        onLog("[REPACKORE:ASSEMBLAGE TERMINÉ] Partition compilée avec succès à 100% depuis UNPACKED/ !")
+
     }
 
     internal fun assembleAutonomousExt4Image(
