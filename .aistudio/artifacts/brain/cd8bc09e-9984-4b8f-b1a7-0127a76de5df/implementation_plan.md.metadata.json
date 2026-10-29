@@ -1,6 +1,6 @@
 {
-  "summary":  "Plan d'implémentation révisé intégrant la vue d'accueil du Gestionnaire de Fichiers structurée en 2 racines majeures (Stockage Interne et Workspace applicatif dédié aux projets décompactés), la refonte du moteur UNPACK/REPACK sans injection lente, et la personnalisation dynamique du Navigation Rail.",
-  "updatedAt":  "2026-10-29T07:40:06.100089446Z",
+  "summary":  "Plan d'implémentation pour résoudre définitivement les erreurs EACCES (Permission denied) lors de la resignature et du repack, causées par la traversée de liens symboliques hors du workspace (ex: /system_ext) et les permissions root sur les fichiers décompactés. Le plan détaille l'isolation stricte des liens symboliques, la réassignation automatique des permissions 777 et chown UID applicatif, ainsi que la sécurisation des flux de lecture binaire.",
+  "updatedAt":  "2026-10-29T17:52:29.636033557Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

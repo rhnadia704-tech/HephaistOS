@@ -17,6 +17,7 @@ import java.io.FileOutputStream
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.nio.file.Files
 import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -453,6 +454,9 @@ object UkaEngine {
                 throw IllegalStateException("Le répertoire cible UNPACKED/$targetName n'existe pas.")
             }
 
+            // SÉCURITÉ ACCÈS : Normaliser les permissions de l'arborescence (chmod 777 / chown UID)
+            WorkspaceManager.ensureDirectoryAccessible(sourceTargetDir, context)
+
             // Load origin metadata from HEPHAISTOS/Data/unpack/<targetName>_meta.json
             val unpackDataDir = WorkspaceManager.getUnpackDataDir(context)
             val metaJsonFile = File(unpackDataDir, "${targetName}_meta.json")
@@ -758,7 +762,12 @@ object UkaEngine {
                     
                     (cd $mountDir && ls -lZd ${'$'}(find . -maxdepth 3 2>/dev/null) 2>/dev/null) > '${destDir.absolutePath}/file_contexts'
                     
-                    chmod -R 775 '${destDir.absolutePath}' 2>/dev/null
+                    APP_UID=${'$'}(stat -c "%u" '${destDir.absolutePath}' 2>/dev/null || echo "")
+                    APP_GID=${'$'}(stat -c "%g" '${destDir.absolutePath}' 2>/dev/null || echo "")
+                    if [ -n "${'$'}APP_UID" ]; then
+                        chown -R ${'$'}APP_UID:${'$'}APP_GID '${destDir.absolutePath}' 2>/dev/null
+                    fi
+                    chmod -R 777 '${destDir.absolutePath}' 2>/dev/null
                     
                     FINAL_COUNT=${'$'}(find '${destDir.absolutePath}' -maxdepth 2 2>/dev/null | wc -l)
                     echo "EXTRACTED_COUNT:${'$'}FINAL_COUNT"
@@ -1169,7 +1178,23 @@ object UkaEngine {
 
         // 2. Fallback to autonomous block synthesis via REPACKORE or container reconstruction
         if (!toolSuccess) {
-            val nonImgFiles = sourceTargetDir.walkTopDown().filter { it.isFile && !it.name.endsWith(".img") }.toList()
+            val nonImgFiles = sourceTargetDir.walkTopDown()
+                .onEnter { dir ->
+                    try {
+                        !Files.isSymbolicLink(dir.toPath())
+                    } catch (e: Exception) {
+                        false
+                    }
+                }
+                .filter {
+                    try {
+                        !Files.isSymbolicLink(it.toPath()) && it.isFile && !it.name.endsWith(".img")
+                    } catch (e: Exception) {
+                        false
+                    }
+                }
+                .toList()
+
             if (nonImgFiles.isNotEmpty()) {
                 onLog("[REPACK] Détection de ${nonImgFiles.size} fichiers décompactés/modifiés. Synthèse active de partition via REPACKORE...")
                 val targetSize = metadata?.fileSizeBytes ?: (nonImgFiles.sumOf { it.length() } * 11 / 10).coerceAtLeast(16 * 1024 * 1024L)
@@ -1180,9 +1205,21 @@ object UkaEngine {
                     onLog = onLog
                 )
             } else {
-                val candidateImg = sourceTargetDir.walkTopDown().firstOrNull {
-                    it.isFile && it.name.endsWith(".img") && it.length() > 1024 && it.absolutePath != outputFile.absolutePath
-                }
+                val candidateImg = sourceTargetDir.walkTopDown()
+                    .onEnter { dir ->
+                        try {
+                            !Files.isSymbolicLink(dir.toPath())
+                        } catch (e: Exception) {
+                            false
+                        }
+                    }
+                    .firstOrNull {
+                        try {
+                            !Files.isSymbolicLink(it.toPath()) && it.isFile && it.name.endsWith(".img") && it.length() > 1024 && it.absolutePath != outputFile.absolutePath
+                        } catch (e: Exception) {
+                            false
+                        }
+                    }
                 if (candidateImg != null) {
                     onLog("[REPACK] Reconstruction à partir des blocs de partition réels (${formatFileSize(candidateImg.length())})...")
                     val buf = ByteArray(4 * 1024 * 1024)

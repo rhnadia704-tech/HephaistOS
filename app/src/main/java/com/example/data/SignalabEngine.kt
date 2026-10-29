@@ -18,6 +18,7 @@ import java.io.FileOutputStream
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.nio.file.Files
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -135,6 +136,9 @@ object SignalabEngine {
             }
         }
 
+        onProgress("Normalisation des permissions de l'espace de travail...", 0.65f)
+        WorkspaceManager.ensureDirectoryAccessible(targetUnpackDir, context)
+
         onProgress("Capture de la géométrie, des inodes et contextes SELinux...", 0.70f)
         val fsConfigFile = File(targetUnpackDir, "fs_config")
         val fileContextsFile = File(targetUnpackDir, "file_contexts")
@@ -146,8 +150,11 @@ object SignalabEngine {
         val treeJson = generateFilesystemTreeJson(targetUnpackDir)
         File(scanDataDir, "filesystem_tree.json").writeText(treeJson.toString(2))
 
-        // Count APKs
-        val allApks = targetUnpackDir.walkTopDown().filter { it.isFile && it.extension.equals("apk", ignoreCase = true) }.toList()
+        // Count APKs (sans suivre les liens symboliques vers le système hôte)
+        val allApks = targetUnpackDir.walkTopDown()
+            .onEnter { !Files.isSymbolicLink(it.toPath()) }
+            .filter { it.isFile && !Files.isSymbolicLink(it.toPath()) && it.extension.equals("apk", ignoreCase = true) }
+            .toList()
         onLog("[INSPECTION] Total de ${allApks.size} applications APK identifiées dans l'image.")
 
         // Blueprint
@@ -212,8 +219,11 @@ object SignalabEngine {
         onLog("Exploration de l'arborescence : ${unpackDir.absolutePath}")
         onLog("=================================================================")
 
+        WorkspaceManager.ensureDirectoryAccessible(unpackDir, context)
+
         val apkFiles = unpackDir.walkTopDown()
-            .filter { it.isFile && (it.extension.equals("apk", ignoreCase = true) || it.extension.equals("apex", ignoreCase = true)) }
+            .onEnter { !Files.isSymbolicLink(it.toPath()) }
+            .filter { it.isFile && !Files.isSymbolicLink(it.toPath()) && (it.extension.equals("apk", ignoreCase = true) || it.extension.equals("apex", ignoreCase = true)) }
             .toList()
 
         val totalApks = apkFiles.size
@@ -344,18 +354,26 @@ object SignalabEngine {
         File(scanDataDir, "key_mapping.json").writeText(mappingJson.toString(2))
 
         onProgress("Indexation des permissions et dépendances...", 0.90f)
-        val permFiles = unpackDir.walkTopDown().filter { it.isFile && it.name.endsWith(".xml", ignoreCase = true) && (it.path.contains("permissions") || it.name.contains("privapp")) }.toList()
+        val permFiles = unpackDir.walkTopDown()
+            .onEnter { !Files.isSymbolicLink(it.toPath()) }
+            .filter { it.isFile && !Files.isSymbolicLink(it.toPath()) && it.name.endsWith(".xml", ignoreCase = true) && (it.path.contains("permissions") || it.name.contains("privapp")) }
+            .toList()
         val permJson = JSONObject().apply {
             put("permission_files_count", permFiles.size)
             put("files", JSONArray(permFiles.map { it.relativeTo(unpackDir).path }))
         }
         File(scanDataDir, "permissions_database.json").writeText(permJson.toString(2))
 
-        // Count ART files (.odex, .vdex, .oat) and fs-verity (.fsvmeta)
-        val artFiles = unpackDir.walkTopDown().filter {
-            it.isFile && (it.extension.equals("odex", ignoreCase = true) || it.extension.equals("vdex", ignoreCase = true) || it.extension.equals("oat", ignoreCase = true))
-        }.toList()
-        val fsvmetaFiles = unpackDir.walkTopDown().filter { it.isFile && (it.extension.equals("fsvmeta", ignoreCase = true) || it.name.endsWith(".fsvmeta")) }.toList()
+        // Count ART files (.odex, .vdex, .oat) and fs-verity (.fsvmeta) without following symlinks
+        val artFiles = unpackDir.walkTopDown()
+            .onEnter { !Files.isSymbolicLink(it.toPath()) }
+            .filter {
+                it.isFile && !Files.isSymbolicLink(it.toPath()) && (it.extension.equals("odex", ignoreCase = true) || it.extension.equals("vdex", ignoreCase = true) || it.extension.equals("oat", ignoreCase = true))
+            }.toList()
+        val fsvmetaFiles = unpackDir.walkTopDown()
+            .onEnter { !Files.isSymbolicLink(it.toPath()) }
+            .filter { it.isFile && !Files.isSymbolicLink(it.toPath()) && (it.extension.equals("fsvmeta", ignoreCase = true) || it.name.endsWith(".fsvmeta")) }
+            .toList()
 
         val depsJson = JSONObject().apply {
             put("art_files_count", artFiles.size)
@@ -392,6 +410,9 @@ object SignalabEngine {
     ): File = withContext(Dispatchers.IO) {
         val unpackDir = File(scanResult.blueprint.unpackedDirPath)
         val laboutDir = WorkspaceManager.getSignalabLaboutDir(context)
+
+        // Assurer l'accès complet et les permissions souveraines sur l'espace de travail
+        WorkspaceManager.ensureDirectoryAccessible(unpackDir, context)
 
         onLog("=================================================================")
         onLog("[SIGNALAB:RESIGN] Lancement de la resignature intégrale & Repack")
@@ -479,7 +500,17 @@ object SignalabEngine {
                     // Replace original with signed in place
                     val signedApk = signed.firstOrNull()
                     if (signedApk != null && signedApk.exists() && signedApk.absolutePath != apk.absolutePath) {
-                        signedApk.copyTo(apk, overwrite = true)
+                        apk.setWritable(true, false)
+                        apk.parentFile?.let { p ->
+                            p.setWritable(true, false)
+                            p.setExecutable(true, false)
+                        }
+                        try {
+                            signedApk.copyTo(apk, overwrite = true)
+                        } catch (_: Exception) {
+                            apk.delete()
+                            signedApk.copyTo(apk, overwrite = true)
+                        }
                     }
                 } catch (e: Exception) {
                     onLog("[ERREUR RESIGNATURE] ${apk.name} : ${e.message}")
@@ -584,7 +615,7 @@ object SignalabEngine {
             onProgress(step, pct / 100f)
             onLog(step)
         }
-        count = destDir.walkTopDown().filter { it.isFile }.count()
+        count = destDir.walkTopDown().onEnter { !Files.isSymbolicLink(it.toPath()) }.filter { it.isFile && !Files.isSymbolicLink(it.toPath()) }.count()
         return count
     }
 
@@ -610,20 +641,25 @@ object SignalabEngine {
                 onLog(msg)
             }
         )
-        val extractedCount = destDir.walkTopDown().filter { it.isFile }.count()
+        val extractedCount = destDir.walkTopDown().onEnter { !Files.isSymbolicLink(it.toPath()) }.filter { it.isFile && !Files.isSymbolicLink(it.toPath()) }.count()
         return extractedCount
     }
 
     private fun generateFilesystemTreeJson(rootDir: File): JSONArray {
         val tree = JSONArray()
         val baseUri = rootDir.toURI()
-        for (file in rootDir.walkTopDown()) {
+        for (file in rootDir.walkTopDown().onEnter { !Files.isSymbolicLink(it.toPath()) }) {
+            val isSymlink = Files.isSymbolicLink(file.toPath())
             val rel = baseUri.relativize(file.toURI()).path
             if (rel.isBlank()) continue
             val item = JSONObject().apply {
                 put("path", rel)
-                put("is_dir", file.isDirectory)
-                put("size", if (file.isFile) file.length() else 0L)
+                put("is_dir", file.isDirectory && !isSymlink)
+                put("is_symlink", isSymlink)
+                if (isSymlink) {
+                    put("target", WorkspaceManager.readSymlinkTarget(file) ?: "")
+                }
+                put("size", if (file.isFile && !isSymlink) file.length() else 0L)
                 put("last_modified", file.lastModified())
                 put("can_read", file.canRead())
                 put("can_write", file.canWrite())
@@ -639,7 +675,8 @@ object SignalabEngine {
         if (fsConfigFile.exists()) return true
         return try {
             val lines = mutableListOf<String>()
-            for (file in rootDir.walkTopDown()) {
+            for (file in rootDir.walkTopDown().onEnter { !Files.isSymbolicLink(it.toPath()) }) {
+                if (Files.isSymbolicLink(file.toPath())) continue
                 val rel = file.relativeTo(rootDir).path
                 if (rel.isBlank()) continue
                 val isDir = file.isDirectory
@@ -700,8 +737,8 @@ object SignalabEngine {
     private fun cleanArtArtifactsAndFsvmeta(rootDir: File, onLog: (String) -> Unit) {
         var artCleaned = 0
         var fsvmetaCleaned = 0
-        for (file in rootDir.walkTopDown().toList()) {
-            if (file.isFile) {
+        for (file in rootDir.walkTopDown().onEnter { !Files.isSymbolicLink(it.toPath()) }.toList()) {
+            if (file.isFile && !Files.isSymbolicLink(file.toPath())) {
                 val ext = file.extension.lowercase(Locale.ROOT)
                 if (ext == "odex" || ext == "vdex" || ext == "oat") {
                     if (file.delete()) artCleaned++

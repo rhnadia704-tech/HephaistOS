@@ -12,6 +12,7 @@ import java.io.FileOutputStream
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.nio.file.Files
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
@@ -57,16 +58,31 @@ object RepackoreEngine {
         var rawBytes = 0L
         var fileCount = 0
         val apksList = mutableListOf<File>()
+        val symlinks = mutableListOf<Pair<String, String>>()
 
-        for (file in unpackedDir.walkTopDown()) {
-            if (file.isFile) {
-                fileCount++
-                rawBytes += file.length()
-                if (file.extension.equals("apk", ignoreCase = true) || file.extension.equals("apex", ignoreCase = true)) {
-                    apksList.add(file)
+        unpackedDir.walkTopDown()
+            .onEnter { dir ->
+                try {
+                    !Files.isSymbolicLink(dir.toPath())
+                } catch (e: Exception) {
+                    false
                 }
             }
-        }
+            .forEach { file ->
+                try {
+                    if (Files.isSymbolicLink(file.toPath())) {
+                        val target = Files.readSymbolicLink(file.toPath()).toString()
+                        val rel = file.relativeTo(unpackedDir).path
+                        symlinks.add(Pair(rel, target))
+                    } else if (file.isFile) {
+                        fileCount++
+                        rawBytes += file.length()
+                        if (file.extension.equals("apk", ignoreCase = true) || file.extension.equals("apex", ignoreCase = true)) {
+                            apksList.add(file)
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
 
         // Dimensionnement dynamique : taille brute + marge de sécurité de 10%
         val marginBytes = (rawBytes * 0.10).toLong().coerceAtLeast(8 * 1024 * 1024L) // au moins 8 Mo de marge
@@ -74,7 +90,6 @@ object RepackoreEngine {
         val totalBlocks = targetBytes / 4096L
 
         // Lecture symlinks.txt
-        val symlinks = mutableListOf<Pair<String, String>>()
         val symlinksFile = File(unpackedDir, "symlinks.txt")
         if (symlinksFile.exists()) {
             symlinksFile.readLines().forEach { line ->
@@ -141,6 +156,9 @@ object RepackoreEngine {
         onLog("Destination : ${outputFile.absolutePath}")
         onLog("Format cible : ${blueprint.containerFormat}")
         onLog("=================================================================")
+
+        // SÉCURITÉ ACCÈS : Normaliser les permissions de l'arborescence (chmod 777 / chown UID)
+        WorkspaceManager.ensureDirectoryAccessible(unpackedDir, context)
 
         onProgress("REPACKORE : Introspection de l'arborescence UNPACKED...", 0.10f)
         val schema = inspectUnpackedSchema(unpackedDir, blueprint.containerFormat, blueprint.partitionName)
@@ -290,7 +308,10 @@ object RepackoreEngine {
         onLog: (String) -> Unit
     ) {
         val buffer = ByteArray(64 * 1024)
-        val files = unpackedDir.walkTopDown().filter { it.isFile }.toList()
+        val files = unpackedDir.walkTopDown()
+            .onEnter { !Files.isSymbolicLink(it.toPath()) }
+            .filter { it.isFile && !Files.isSymbolicLink(it.toPath()) }
+            .toList()
         val total = files.size
         val baseUri = unpackedDir.toURI()
 
@@ -302,11 +323,16 @@ object RepackoreEngine {
                 val rel = baseUri.relativize(file.toURI()).path
                 val entry = ZipEntry(rel)
                 zos.putNextEntry(entry)
-                FileInputStream(file).use { fis ->
-                    var len: Int
-                    while (fis.read(buffer).also { len = it } > 0) {
-                        zos.write(buffer, 0, len)
+                try {
+                    file.setReadable(true, false)
+                    FileInputStream(file).use { fis ->
+                        var len: Int
+                        while (fis.read(buffer).also { len = it } > 0) {
+                            zos.write(buffer, 0, len)
+                        }
                     }
+                } catch (e: Exception) {
+                    onLog("[AVERTISSEMENT] Fichier ignoré (${file.name}) : ${e.message}")
                 }
                 zos.closeEntry()
             }
@@ -424,8 +450,32 @@ object RepackoreEngine {
 
             // STREAMING DIRECT & SÉQUENTIEL DE TOUS LES FICHIERS DE UNPACKED/ (ZÉRO INJECTION SECTORIELLE)
             onProgress("REPACKORE : Recompilation directe des fichiers depuis UNPACKED/...", 0.50f)
-            val allFiles = unpackedDir.walkTopDown().filter { it.isFile }.toList()
-            onLog("[REPACKORE:ASSEMBLAGE] Écriture séquentielle directe de ${allFiles.size} fichier(s) décompactés...")
+
+            // SÉCURITÉ : Ne jamais suivre les symlinks de répertoire qui pointent vers le système hôte
+            val allFiles = mutableListOf<File>()
+            val isolatedSymlinks = mutableListOf<Pair<String, String>>()
+
+            unpackedDir.walkTopDown()
+                .onEnter { dir ->
+                    try {
+                        !Files.isSymbolicLink(dir.toPath())
+                    } catch (e: Exception) {
+                        false
+                    }
+                }
+                .forEach { file ->
+                    try {
+                        if (Files.isSymbolicLink(file.toPath())) {
+                            val target = Files.readSymbolicLink(file.toPath()).toString()
+                            val rel = file.relativeTo(unpackedDir).path
+                            isolatedSymlinks.add(Pair(rel, target))
+                        } else if (file.isFile) {
+                            allFiles.add(file)
+                        }
+                    } catch (_: Exception) {}
+                }
+
+            onLog("[REPACKORE:ASSEMBLAGE] Écriture séquentielle directe de ${allFiles.size} fichier(s) réels (${isolatedSymlinks.size} liens symboliques isolés)...")
 
             // Début des blocs de données après les métadonnées EXT4 (offset 131 072 = bloc 32)
             var currentBlockOffset = 32L * 4096L
@@ -437,21 +487,38 @@ object RepackoreEngine {
                     onProgress("Recompilation : ${file.name} (${idx + 1}/${allFiles.size})", progress)
                 }
 
+                // Vérifier si le fichier est un lien symbolique qui aurait échappé
+                try {
+                    if (Files.isSymbolicLink(file.toPath())) {
+                        continue
+                    }
+                } catch (_: Exception) {}
+
+                val fileLen = try { file.length() } catch (_: Exception) { 0L }
+                if (fileLen <= 0L) {
+                    continue
+                }
+
                 // Alignement au bloc de 4 Ko
                 currentBlockOffset = ((currentBlockOffset + 4095L) / 4096L) * 4096L
-                if (currentBlockOffset + file.length() >= totalBytes) {
+                if (currentBlockOffset + fileLen >= totalBytes) {
                     // Expansion dynamique de la taille si les fichiers dépassent
-                    val newLen = currentBlockOffset + file.length() + 8 * 1024 * 1024L
+                    val newLen = currentBlockOffset + fileLen + 8 * 1024 * 1024L
                     raf.setLength(newLen)
                 }
 
                 raf.seek(currentBlockOffset)
-                FileInputStream(file).use { fis ->
-                    var r: Int
-                    while (fis.read(copyBuffer).also { r = it } > 0) {
-                        raf.write(copyBuffer, 0, r)
-                        currentBlockOffset += r
+                try {
+                    file.setReadable(true, false)
+                    FileInputStream(file).use { fis ->
+                        var r: Int
+                        while (fis.read(copyBuffer).also { r = it } > 0) {
+                            raf.write(copyBuffer, 0, r)
+                            currentBlockOffset += r
+                        }
                     }
+                } catch (e: Exception) {
+                    onLog("[AVERTISSEMENT] Fichier ignoré (${file.name}) lors de l'assemblage : ${e.message}")
                 }
             }
         }

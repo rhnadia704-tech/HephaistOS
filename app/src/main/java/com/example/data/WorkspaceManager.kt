@@ -7,6 +7,7 @@ import android.provider.OpenableColumns
 import com.example.model.KeysetInfo
 import java.io.File
 import java.io.FileOutputStream
+import java.nio.file.Files
 
 object WorkspaceManager {
 
@@ -116,10 +117,10 @@ object WorkspaceManager {
 
         val workspaceProjects = getInternalUnpackDir(context).listFiles()?.filter { it.isDirectory }?.size ?: 0
         val workspaceTotalFiles = try {
-            getInternalWorkspaceDir(context).walkTopDown().filter { it.isFile }.count()
+            walkSafe(getInternalWorkspaceDir(context)).count()
         } catch (_: Exception) { 0 }
         val workspaceSize = try {
-            getInternalWorkspaceDir(context).walkTopDown().filter { it.isFile }.sumOf { it.length() }
+            walkSafe(getInternalWorkspaceDir(context)).sumOf { it.length() }
         } catch (_: Exception) { 0L }
 
         return listOf(
@@ -361,8 +362,8 @@ object WorkspaceManager {
 
         // 5. Recursive search by filename in HEPHAISTOS root
         val fileNameOnly = clean.substringAfterLast("/").substringAfterLast("\\")
-        val foundInWorkspace = rootDir.walkTopDown().firstOrNull {
-            it.isFile && (it.name.equals(fileNameOnly, ignoreCase = true) || it.name.equals(if (fileNameOnly.endsWith(".apk", ignoreCase = true)) fileNameOnly else "$fileNameOnly.apk", ignoreCase = true))
+        val foundInWorkspace = walkSafe(rootDir).firstOrNull {
+            it.name.equals(fileNameOnly, ignoreCase = true) || it.name.equals(if (fileNameOnly.endsWith(".apk", ignoreCase = true)) fileNameOnly else "$fileNameOnly.apk", ignoreCase = true)
         }
         if (foundInWorkspace != null) return foundInWorkspace
 
@@ -391,7 +392,7 @@ object WorkspaceManager {
         )
         for (dir in searchDirs) {
             if (dir.exists()) {
-                dir.walkTopDown().maxDepth(5).filter { it.isFile && it.name.endsWith(".apk", ignoreCase = true) }.forEach { file ->
+                walkSafe(dir).filter { it.name.endsWith(".apk", ignoreCase = true) }.forEach { file ->
                     if (!results.any { it.name.equals(file.name, ignoreCase = true) && it.length() == file.length() }) {
                         results.add(file)
                         if (results.size >= maxLimit) return results
@@ -1098,5 +1099,79 @@ Les satellites sont de véritables extensions intégrées d'HephaistOS :
         )
 
         return templateDir
+    }
+
+    /**
+     * Garantit l'accès en lecture/écriture total sur un répertoire décompacté
+     * Réassigne l'UID applicatif et applique chmod 777 pour éviter toute erreur EACCES.
+     */
+    fun ensureDirectoryAccessible(dir: File, context: Context? = null) {
+        if (!dir.exists()) return
+        try {
+            dir.setReadable(true, false)
+            dir.setWritable(true, false)
+            dir.setExecutable(true, false)
+
+            val uid = context?.applicationInfo?.uid
+            val chownCmd = if (uid != null) "chown -R $uid:$uid '${dir.absolutePath}' 2>/dev/null; " else ""
+            val cmd = "${chownCmd}chmod -R 777 '${dir.absolutePath}' 2>/dev/null"
+
+            // 1. Essai shell standard
+            try {
+                val p = Runtime.getRuntime().exec(arrayOf("sh", "-c", cmd))
+                p.waitFor()
+            } catch (_: Exception) {}
+
+            // 2. Si rooté, exécuter sous su pour corriger les résidus root (tar / loop)
+            try {
+                val suProcess = Runtime.getRuntime().exec("su")
+                suProcess.outputStream.bufferedWriter().use { writer ->
+                    writer.write(cmd + "\nexit\n")
+                    writer.flush()
+                }
+                suProcess.waitFor()
+            } catch (_: Exception) {}
+        } catch (_: Exception) {}
+    }
+
+    /**
+     * Parcours récursif sécurisé qui n'entre JAMAIS dans les liens symboliques de répertoire
+     * (évite de fuiter hors du workspace vers /system_ext, /vendor ou la racine de l'appareil hôte).
+     */
+    fun walkSafe(rootDir: File): Sequence<File> {
+        if (!rootDir.exists()) return emptySequence()
+        return rootDir.walkTopDown()
+            .onEnter { dir ->
+                try {
+                    !Files.isSymbolicLink(dir.toPath())
+                } catch (e: Exception) {
+                    false
+                }
+            }
+            .filter { file ->
+                try {
+                    !Files.isSymbolicLink(file.toPath())
+                } catch (e: Exception) {
+                    false
+                }
+            }
+    }
+
+    fun isSymlink(file: File): Boolean {
+        return try {
+            Files.isSymbolicLink(file.toPath())
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    fun readSymlinkTarget(file: File): String? {
+        return try {
+            if (Files.isSymbolicLink(file.toPath())) {
+                Files.readSymbolicLink(file.toPath()).toString()
+            } else null
+        } catch (e: Exception) {
+            null
+        }
     }
 }
