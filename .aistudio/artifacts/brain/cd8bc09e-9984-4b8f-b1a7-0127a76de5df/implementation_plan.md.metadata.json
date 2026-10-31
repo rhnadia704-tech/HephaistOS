@@ -1,6 +1,6 @@
 {
-  "summary":  "Plan d'implémentation pour la synchronisation automatique des permissions SELinux/Android (plat_mac_permissions.xml et XMLs associés), la suppression de l'artefact journal [SYS] pour respecter la structure originale en lecture seule (ro), et la préservation de la structure et du boot DSU.",
-  "updatedAt":  "2026-10-31T09:22:11.924679656Z",
+  "summary":  "Plan d'implémentation pour résoudre le reboot immédiat vers Recovery lors du boot DSU (Résolution des contextes SELinux, attribution fs_config, recalcul de l'arbre de hachage AVB 2.0 / dm-verity et génération du footer AVB0 conforme à la cible).",
+  "updatedAt":  "2026-10-31T10:40:58.584894321Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

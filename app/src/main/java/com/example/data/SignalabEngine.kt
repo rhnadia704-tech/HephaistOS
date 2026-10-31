@@ -558,6 +558,7 @@ object SignalabEngine {
             unpackedDir = unpackDir,
             blueprint = scanResult.blueprint,
             outputFile = finalOutputFile,
+            patchAvb = options.patchAvb,
             onProgress = onProgress,
             onLog = onLog
         )

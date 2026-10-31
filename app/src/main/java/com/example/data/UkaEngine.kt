@@ -1167,6 +1167,7 @@ object UkaEngine {
             unpackedDir = sourceTargetDir,
             blueprint = blueprint,
             outputFile = outputFile,
+            patchAvb = patchAvb,
             onProgress = { step, _ -> onLog("[$step]") },
             onLog = onLog
         )

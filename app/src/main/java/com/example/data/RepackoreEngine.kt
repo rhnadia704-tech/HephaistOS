@@ -195,6 +195,7 @@ object RepackoreEngine {
         unpackedDir: File,
         blueprint: SignalabScanBlueprint,
         outputFile: File,
+        patchAvb: Boolean = false,
         onProgress: (step: String, progress: Float) -> Unit = { _, _ -> },
         onLog: (String) -> Unit = {}
     ): File = withContext(Dispatchers.IO) {
@@ -234,9 +235,27 @@ object RepackoreEngine {
             }
         }
 
+        // Intégration souveraine de l'intégrité AVB 2.0 & dm-verity pour partitions système/GSI (Boot DSU)
+        if (blueprint.containerFormat != "zip" && outputFile.exists() && outputFile.length() > 4096L) {
+            onProgress("REPACKORE : Intégration AVB 2.0 & Arbre dm-verity (Boot DSU)...", 0.82f)
+            val partName = blueprint.partitionName.ifBlank { "system" }
+            val keysetDir = File(WorkspaceManager.getSignerKeysetDir(context), "HephaistOS_Production")
+            val avbKeyFile = File(keysetDir, "avb.pk8").let { if (it.exists()) it else null }
+            val avbSuccess = AvbVerityEngine.processAndSignPartitionAvb(
+                imageFile = outputFile,
+                partitionName = partName,
+                avbKeyFile = avbKeyFile,
+                disableVerity = patchAvb,
+                onLog = onLog
+            )
+            if (avbSuccess) {
+                onLog("[REPACKORE:AVB] Arbre dm-verity et footer AVB0 intégrés avec succès.")
+            }
+        }
+
         // Si le format d'origine était sparse, convertir l'image brute en Android Sparse
         if (blueprint.containerFormat == "sparse_img" && outputFile.exists()) {
-            onProgress("REPACKORE : Encodage Android Sparse (simg)...", 0.85f)
+            onProgress("REPACKORE : Encodage Android Sparse (simg)...", 0.88f)
             val rawCopy = File(outputFile.parentFile, "${outputFile.nameWithoutExtension}_temp_raw.img")
             outputFile.copyTo(rawCopy, overwrite = true)
             convertRawToSparse(rawCopy, outputFile, onLog)
@@ -496,6 +515,70 @@ object RepackoreEngine {
                             else
                                 cp -a '${payloadDir.absolutePath}/.' $mountDir/
                             fi
+
+                            # Restauration fidèle des liens symboliques natifs
+                            for symFile in '${payloadDir.absolutePath}/symlinks.txt' '${unpackedDir.absolutePath}/symlinks.txt'; do
+                                if [ -f "${'$'}symFile" ]; then
+                                    while IFS= read -r symline || [ -n "${'$'}symline" ]; do
+                                        case "${'$'}symline" in
+                                            *-\>*)
+                                                src="${'$'}(echo "${'$'}symline" | cut -d'>' -f1 | tr -d ' ' | sed 's/->//g' | sed 's/^\.\///')"
+                                                dst="${'$'}(echo "${'$'}symline" | cut -d'>' -f2 | tr -d ' ')"
+                                                if [ -n "${'$'}src" ] && [ -n "${'$'}dst" ]; then
+                                                    rm -f "$mountDir/${'$'}src" 2>/dev/null
+                                                    mkdir -p "${'$'}(dirname "$mountDir/${'$'}src")" 2>/dev/null
+                                                    ln -sf "${'$'}dst" "$mountDir/${'$'}src" 2>/dev/null
+                                                fi
+                                                ;;
+                                        esac
+                                    done < "${'$'}symFile"
+                                    break
+                                fi
+                            done
+
+                            # Restauration rigoureuse des permissions et UID/GID d'après fs_config
+                            chown -R 0:0 $mountDir 2>/dev/null
+                            chmod 755 $mountDir 2>/dev/null
+
+                            for fsConfigFile in '${payloadDir.absolutePath}/fs_config' '${unpackedDir.absolutePath}/fs_config'; do
+                                if [ -f "${'$'}fsConfigFile" ]; then
+                                    while read -r fspath fsuid fsgid fsmode fscap || [ -n "${'$'}fspath" ]; do
+                                        case "${'$'}fspath" in
+                                            \#*|"") continue ;;
+                                            *)
+                                                clean_p="${'$'}(echo "${'$'}fspath" | sed 's/^\///')"
+                                                target_p="$mountDir/${'$'}clean_p"
+                                                if [ -e "${'$'}target_p" ] || [ -L "${'$'}target_p" ]; then
+                                                    chown -h "${'$'}fsuid:${'$'}fsgid" "${'$'}target_p" 2>/dev/null
+                                                    chmod "${'$'}fsmode" "${'$'}target_p" 2>/dev/null
+                                                fi
+                                                ;;
+                                        esac
+                                    done < "${'$'}fsConfigFile"
+                                    break
+                                fi
+                            done
+
+                            # Restauration rigoureuse des contextes SELinux (vital pour éviter le reboot DSU vers recovery)
+                            if which restorecon >/dev/null 2>&1; then
+                                restorecon -RF $mountDir 2>/dev/null
+                            fi
+                            if which chcon >/dev/null 2>&1; then
+                                chcon -R u:object_r:system_file:s0 $mountDir 2>/dev/null
+                                chcon -R u:object_r:system_file:s0 $mountDir/system 2>/dev/null
+                                chcon -R u:object_r:system_file:s0 $mountDir/system/framework 2>/dev/null
+                                chcon -R u:object_r:system_file:s0 $mountDir/system/app 2>/dev/null
+                                chcon -R u:object_r:system_file:s0 $mountDir/system/priv-app 2>/dev/null
+                                chcon -R u:object_r:system_file:s0 $mountDir/system/etc 2>/dev/null
+                                chcon -h u:object_r:init_exec:s0 $mountDir/init $mountDir/system/bin/init 2>/dev/null
+                                chcon -h u:object_r:shell_exec:s0 $mountDir/system/bin/sh $mountDir/bin/sh 2>/dev/null
+                                chcon -h u:object_r:toolbox_exec:s0 $mountDir/system/bin/toybox $mountDir/system/bin/toolbox 2>/dev/null
+                                chcon -h u:object_r:system_file:s0 $mountDir/system/bin/app_process $mountDir/system/bin/app_process64 2>/dev/null
+                                chcon -R u:object_r:vendor_file:s0 $mountDir/vendor 2>/dev/null
+                                chcon -R u:object_r:system_file:s0 $mountDir/product 2>/dev/null
+                                chcon -R u:object_r:system_file:s0 $mountDir/system_ext 2>/dev/null
+                            fi
+
                             # Nettoyage des fichiers techniques résiduels pour garantir une partition 100% conforme à l'originale
                             rm -f $mountDir/symlinks.txt $mountDir/fs_config $mountDir/file_contexts $mountDir/filesystem_tree.json $mountDir/repack_blueprint.json $mountDir/*.meta.json 2>/dev/null
                             sync
