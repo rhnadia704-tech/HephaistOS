@@ -753,6 +753,8 @@ object SignalabEngine {
         var fsvmetaCleaned = 0
         for (file in rootDir.walkTopDown().onEnter { !Files.isSymbolicLink(it.toPath()) }.toList()) {
             if (file.isFile && !Files.isSymbolicLink(file.toPath())) {
+                val isGapp = GemeauSignerEngine.isProtectedGapp(file.relativeTo(rootDir).path, file)
+                if (isGapp) continue
                 val ext = file.extension.lowercase(Locale.ROOT)
                 if (ext == "odex" || ext == "vdex" || ext == "oat") {
                     if (file.delete()) artCleaned++
@@ -761,7 +763,7 @@ object SignalabEngine {
                 }
             }
         }
-        onLog("[ART CLEANUP] $artCleaned fichiers odex/vdex/oat et $fsvmetaCleaned métadonnées fs-verity purgés.")
+        onLog("[ART CLEANUP] $artCleaned fichiers odex/vdex/oat et $fsvmetaCleaned métadonnées fs-verity purgés (GApps préservés).")
         onLog("[CONSEIL SOUVERAIN] Le système déclenchera une compilation dexopt runtime propre au premier démarrage.")
     }
 
@@ -813,17 +815,20 @@ object SignalabEngine {
 
         onLog("[SELINUX/PERMISSIONS] ${roleToNewHex.size} profil(s) de clé et ${oldHexToNewHex.size} signature(s) mappés pour l'alignement.")
 
-        // 2. Parcourir toute l'arborescence à la recherche des fichiers de permissions SELinux et Android
+        // 2. Parcourir toute l'arborescence à la recherche des fichiers de permissions SELinux et Android (dynamique sans liste fermée)
         var updatedCount = 0
         val targetFiles = rootDir.walkTopDown()
             .onEnter { !Files.isSymbolicLink(it.toPath()) }
             .filter { file ->
-                file.isFile && !Files.isSymbolicLink(file.toPath()) &&
-                (file.name.contains("mac_permissions", ignoreCase = true) ||
-                 (file.name.endsWith(".xml", ignoreCase = true) && 
-                  (file.parentFile?.name.equals("permissions", ignoreCase = true) || 
-                   file.parentFile?.name.equals("selinux", ignoreCase = true) ||
-                   file.name.startsWith("privapp-permissions", ignoreCase = true))))
+                if (!file.isFile || Files.isSymbolicLink(file.toPath())) return@filter false
+                if (file.name in RepackoreEngine.EXCLUDED_METADATA_FILES) return@filter false
+                val ext = file.extension.lowercase(Locale.ROOT)
+                if (ext in setOf("apk", "apex", "so", "odex", "vdex", "art", "fsvmeta", "png", "jpg", "jpeg", "webp", "bin", "img", "gz", "zip")) return@filter false
+                file.length() in 16L..(15L * 1024L * 1024L) && (
+                    ext in setOf("xml", "cil", "conf", "prop", "txt") ||
+                    file.name.contains("mac_permissions", ignoreCase = true) ||
+                    file.name.contains("permissions", ignoreCase = true)
+                )
             }
             .toList()
 

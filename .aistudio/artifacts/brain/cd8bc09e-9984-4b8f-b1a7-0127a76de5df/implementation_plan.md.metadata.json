@@ -1,6 +1,6 @@
 {
-  "summary":  "Plan d'implémentation pour résoudre le reboot immédiat vers Recovery lors du boot DSU (Résolution des contextes SELinux, attribution fs_config, recalcul de l'arbre de hachage AVB 2.0 / dm-verity et génération du footer AVB0 conforme à la cible).",
-  "updatedAt":  "2026-10-31T10:40:58.584894321Z",
+  "summary":  "Plan d'implémentation révisé : Respect absolu de la chaîne de confiance et de la structure du GSI d'origine. Système de clonage intelligent par clusters avec préservation des GApps, détection dynamique et analyse croisée des fichiers déclarant des signatures (sans noms de fichiers codés en dur), mise à jour structurelle chirurgicale et respect strict du système de fichiers de la cible.",
+  "updatedAt":  "2026-10-31T16:13:23.461088118Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

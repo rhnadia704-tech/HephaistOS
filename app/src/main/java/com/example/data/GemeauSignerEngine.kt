@@ -2441,12 +2441,15 @@ object GemeauSignerEngine {
     // ─────────────────────────────────────────────────────────────────────────
     // HELPER METHODS: CRYPTOGRAPHY, ASN.1 & AVB VBMETA SYNTHESIS
     // ─────────────────────────────────────────────────────────────────────────
-    private fun isProtectedGapp(path: String, file: File): Boolean {
+    fun isProtectedGapp(path: String, file: File): Boolean {
         for (pkg in PROTECTED_GAPP_PACKAGES) {
             if (path.contains(pkg, ignoreCase = true)) return true
         }
         for (name in PROTECTED_GAPP_NAMES) {
             if (path.contains(name, ignoreCase = true) || file.name.contains(name, ignoreCase = true)) return true
+        }
+        if (path.contains("/google", ignoreCase = true) || path.contains("gms", ignoreCase = true)) {
+            return true
         }
         return false
     }

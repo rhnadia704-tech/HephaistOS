@@ -1,50 +1,102 @@
-# Plan d'implémentation : Résolution du Bootloop DSU vers Recovery (AVB 2.0, dm-verity & Contextes SELinux)
+# Respect Strict de la Chaîne de Confiance & Détection Dynamique des Signatures du GSI
 
-## 1. Diagnostic Approfondi du Crash Immédiat (Écran Splash ➔ Recovery)
-L'utilisateur constate un reboot immédiat vers le Recovery dès le logo de démarrage (splash screen), avant même l'animation de boot d'Android, sur un appareil avec AVB / dm-verity en mode Enforcing (Réponse 1 & 3).
+Ce plan d'implémentation révisé intègre fidèlement les directives de l'utilisateur : abandonner toute fausse piste et respecter scrupuleusement la logique, la structure et la chaîne de confiance native du GSI cible.
 
-Deux facteurs bloquants majeurs provoquent ce comportement sous DSU Sideloader :
-1. **Absence ou Invalidation de l'Arbre de Hachage AVB 2.0 / dm-verity (Root Digest Mismatch)** :
-   - Dans une partition GSI d'origine, la partition se termine par un footer `AVB0` et un arbre de blocs cryptographiques dm-verity (SHA-256).
-   - Lors de la modification des APKs et de la reconstruction EXT4, les blocs de données ont changé. L'image brute résultante ne possède plus de footer AVB valide, ou possède un condensat racine (`root_digest`) discordé.
-   - Lors du montage de la partition par `first_stage_mount` dans le noyau, le module `dm-verity` détecte une corruption des blocs, déclenche un `kernel panic` avec option `restart_on_corruption`, renvoyant immédiatement le téléphone en Recovery.
-2. **Contextes de Sécurité SELinux Vides ou Invalides (`file_contexts` & `fs_config`)** :
-   - Lors de la copie par montage loop, les fichiers extraits dans `/data/local/tmp` héritent du contexte utilisateur Android de l'application hôte (`u:object_r:app_data_file:s0`).
-   - Si les étiquettes SELinux (`u:object_r:init_exec:s0`, `u:object_r:system_file:s0`, `u:object_r:shell_exec:s0`) et les UID/GID (`root:root` 0:0, `system:system` 1000:1000) ne sont pas formellement restaurés d'après `file_contexts` et `fs_config` via `setfiles` / `chcon` / `restorecon` ou un script de labelling, le binaire `/system/bin/init` est immédiatement bloqué par la politique SELinux au démarrage.
-3. **Respect strict de la directive utilisateur** :
-   - *"Garder la logique entière de la cible mais avec une nouvelle [signature / recalcul de l'arbre AVB]"* : recalculer l'arbre dm-verity avec un footer AVB 2.0 officiel et restaurer 100% de la fidélité de la cible (SELinux + permissions + symlinks).
+## Synthèse des Décisions & Choix Confirmés
+
+> [!IMPORTANT]
+> - **Chaîne de confiance de la cible** : Le clonage des clés doit être automatique et intelligent. Il doit cartographier les rôles et clusters de la cible (Platform, Media, Shared, NetworkStack, Vendor) et reproduire fidèlement chaque certificat (DN, algorithmes, tailles de clés).
+> - **Préservation des GApps** : Détection automatique et préservation intégrale des applications Google (GApps / Google Play Services) sans altérer leur signature d'origine.
+> - **Détection dynamique des fichiers de signature** : Aucun nom de fichier ni chemin en dur. Le moteur effectue une analyse croisée dynamique de l'ensemble de l'arborescence pour repérer tous les fichiers déclarant ou référençant les signatures des APKs d'origine, et opère une mise à jour chirurgicale de leur contenu en préservant 100% de leur structure XML/texte d'origine.
+> - **Structure de l'image** : Respect strict du système de fichiers d'origine (EXT4 read-only sans journal ni artefacts de travail), restauration des symlinks natifs et labels `file_contexts` exacts de la cible.
 
 ---
 
-## 2. Architecture & Modifications Proposées
+## 1. Architecture & Chaîne de Confiance Native
 
-### A. Moteur Autonome de Calcul dm-verity & Footer AVB 2.0 (`AvbVerityEngine.kt` / `RepackoreEngine.kt`)
-- **Calcul de l'arbre de hachage dm-verity (Level-by-Level SHA-256)** :
-  - Découper le système de fichiers EXT4 en blocs de 4096 octets.
-  - Calculer récursivement les tables de hachage SHA-256 avec le sel (`salt`) de la partition d'origine (ou un sel sécurisé de 32 octets).
-  - Obtenir le `root_digest` exact du nouveau système de fichiers.
-- **Synthèse du Footer AVB 2.0 (`AVB0`)** :
-  - Écrire le descripteur d'arbre de hachage (`AvbHashtreeDescriptor`) contenant le nom de la partition (`system`), la taille du système de fichiers, l'offset de l'arbre, la taille de l'arbre et le `root_digest`.
-  - Apposer le footer AVB 2.0 standard (`AvbFooter` de 64 octets avec magic `AVB0`) dans le dernier bloc de 4096 octets de l'image.
-  - Aligner la taille de la partition pour une conformité parfaite avec `fs_mgr` et DSU Sideloader.
-- **Accompagnement `vbmeta.img` dédié (Optionnel / Automatique)** :
-  - Générer un fichier `vbmeta.img` correspondant signé avec la clé `avb.pk8` du keyset, contenant le descripteur mis à jour pour les utilisateurs souhaitant flasher la chaîne complète.
-
-### B. Restauration Rigoureuse des Contextes SELinux & Permissions (`RepackoreEngine.kt`)
-- **Application automatique de `file_contexts` & `fs_config` lors du montage loop** :
-  - Injecter un script de labelling SELinux qui lit `file_contexts` et applique les contextes réels (`chcon` ou `restorecon -RF /` ou commande `setfiles` si disponible).
-  - Appliquer les UID/GID et modes POSIX d'après `fs_config` (notamment `root:root` 0:0 sur `/system/bin/init`, `/system/bin/sh` à `0:2000`, 0755, suid/sgid).
-- **Rétablissement des Liens Symboliques Réels** :
-  - Parcourir `symlinks.txt` pour recréer tous les liens relatifs et absolus (`ln -sf`) directement sur le système de fichiers monté avant le démontage et le calcul AVB.
-- **Nettoyage strict des artefacts de travail** :
-  - S'assurer qu'aucun fichier temporaire (`symlinks.txt`, `fs_config`, `file_contexts`, `repack_blueprint.json`) ne reste dans le système de fichiers final.
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                   GSI CIBLE D'ORIGINE DÉBALLÉ                          │
+└──────────────────────────────────┬─────────────────────────────────────┘
+                                   │
+                                   ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│ 1. Cartographie Dynamique des Clusters de Signatures                   │
+│    - Scan de tous les APKs système                                     │
+│    - Détection intelligente des GApps -> Marqué "PRÉSERVÉ INTACT"      │
+│    - Regroupement des APKs par certificat d'origine (empreintes SHA256)│
+│    - Synthèse de clés miroirs (Verisin Clone) reproduisant fidèlement  │
+│      les Distinguished Names (DN), algorithmes et tailles de clés      │
+└──────────────────────────────────┬─────────────────────────────────────┘
+                                   │
+                                   ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│ 2. Analyse Croisée & Mutation Dynamique des Déclarations de Signatures │
+│    - Recherche de toutes les occurrences des signatures originales     │
+│      dans TOUS les fichiers texte/XML/cert de la partition             │
+│      (sans liste fermée : plat_mac_permissions, permissions, etc.)    │
+│    - Substitution chirurgicale des empreintes/hexadécimaux             │
+│    - Préservation intégrale de la structure, balises et indentation    │
+└──────────────────────────────────┬─────────────────────────────────────┘
+                                   │
+                                   ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│ 3. Resignature Cohérente & Nettoyage des Caches Dépassés                │
+│    - Signature de chaque APK avec la clé miroir de son cluster         │
+│    - Purge des caches ART (oat/*.odex, *.vdex) des APKs résignés       │
+│      (permettant la compilation JIT saine au premier boot DSU)         │
+└──────────────────────────────────┬─────────────────────────────────────┘
+                                   │
+                                   ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│ 4. Reconstitution Souveraine de la Partition Cible                     │
+│    - Respect de la géométrie, du format EXT4 et de la racine /         │
+│    - Application des contextes exacts issus de file_contexts et        │
+│      des UID/GID de fs_config                                          │
+│    - Calcul et injection de l'arbre AVB 2.0 dm-verity avec footer AVB0 │
+└────────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
-## 3. Plan de Vérification
-1. **Tests Unitaires & Moteur Cryptographique** :
-   - Tester le calcul d'un arbre dm-verity sur un jeu de blocs connu et vérifier la structure binaire du footer `AVB0`.
-   - Tester la persistance des descripteurs de contextes SELinux et des permissions dans les tests de `RepackoreEngineTest`.
-   - Exécuter `gradle :app:testDebugUnitTest`.
-2. **Validation Globale du Build** :
-   - Exécuter `compile_applet` pour certifier une compilation sans aucune erreur.
+## 2. Plan Technique Détaillé
+
+### Étape 1 : Cartographie Intelligente des Clusters & Préservation des GApps
+- **Détection des GApps & Packages Délicats** :
+  - Identification automatique basée sur l'émetteur du certificat (`Google Inc.`, `Android`, `Google LLC`), le package name (`com.google.android.*`, `com.android.vending`) ou l'emplacement (`*/priv-app/Google*`, `*/priv-app/GmsCore*`, `*/app/Google*`).
+  - Ces applications sont exclues de toute resignature pour préserver l'intégrité de Google Play Services et de la chaîne de confiance OEM.
+- **Groupement par Empreinte de Certificat** :
+  - Extraction de l'ensemble des certificats X.509 de la partition.
+  - Regroupement des APKs partageant le même certificat en clusters cohérents (ex: cluster principal système/platform, cluster media, cluster networkstack).
+  - Génération automatique pour chaque cluster d'une clé clone miroir conservant le DN complet (`C=US, ST=California, O=Google, CN=Android...`), l'algorithme (`SHA256withRSA`, `SHA256withECDSA`), et la taille de clé (2048/4096 bits ou P-256).
+
+### Étape 2 : Moteur d'Analyse Croisée Dynamique des Fichiers Déclaratifs
+- **Zéro liste codée en dur** :
+  - Le système extrait la représentation hexadécimale brute (DER encodé en hex), l'empreinte SHA-256 et la signature base64 de chaque certificat original trouvé dans les APKs.
+  - Parcours récursif de tous les fichiers de configuration de la partition (`/etc/`, `/system/etc/`, `/system_ext/etc/`, `/product/etc/`, etc.).
+  - Analyse du contenu textuel et XML : dès qu'une signature originale est détectée dans un fichier (par exemple à l'intérieur d'un attribut `signature="..."`, d'une balise `<certificate>`, ou d'une liste de certificats), le moteur remplace cette valeur par la nouvelle signature correspondante au cluster de l'APK.
+  - **Respect absolu du format** : La casse hexadécimale, les retours à la ligne et la structure XML initiale sont strictement conservés.
+
+### Étape 3 : Nettoyage Ciblé des Caches Précompilés
+- Pour chaque APK dont la signature a été modifiée par son clone miroir :
+  - Si un dossier `oat/` ou des fichiers `.odex` / `.vdex` lui sont associés dans son sous-répertoire, les supprimer afin d'éviter le rejet de checksum au premier démarrage.
+  - Les APKs préservés (notamment les GApps) conservent leurs fichiers `.odex` / `.vdex` intacts.
+
+### Étape 4 : Assemblage et Signature AVB 2.0 Conforme à la Cible
+- Lors de la compilation EXT4 par `RepackoreEngine` :
+  - Fichiers placés directement à la racine de la partition.
+  - Restauration des liens symboliques depuis `symlinks.txt`.
+  - Application des permissions d'origine depuis `fs_config`.
+  - Application des labels SELinux stricts d'après `file_contexts`.
+  - Calcul de l'arbre de hachage dm-verity et apposition du descripteur `AvbHashtreeDescriptor` (180 octets) et du footer `AVB0` (64 octets).
+
+---
+
+## 3. Matrice de Validation & Tests
+
+1. **Test unitaire de détection croisée dynamique** :
+   - Vérifier que l'analyseur dynamique localise et remplace les signatures d'origine dans des fichiers XML arbitraires sans connaître leurs noms à l'avance.
+2. **Test unitaire du filtre de préservation GApps** :
+   - Confirmer qu'un APK signé par Google ou appartenant à la suite GApps est identifié et exempté de toute altération.
+3. **Compilation globale et exécution de la suite de tests** :
+   - Exécution de `gradle :app:testDebugUnitTest` et vérification avec `compile_applet`.

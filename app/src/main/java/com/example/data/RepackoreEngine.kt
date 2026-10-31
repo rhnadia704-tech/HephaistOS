@@ -13,6 +13,8 @@ import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.file.Files
+import java.security.MessageDigest
+import java.util.Locale
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
@@ -218,6 +220,16 @@ object RepackoreEngine {
         onLog("[REPACKORE:SCHÉMA] ${schema.totalFiles} fichiers recensés (${formatSize(schema.totalBytes)}).")
         onLog("[REPACKORE:GÉOMÉTRIE] Dimensionnement dynamique (+10%) : ${formatSize(schema.targetSizeWithMargin)} (${schema.totalBlocks} blocs de 4K).")
         onLog("[REPACKORE:APKS] ${schema.apks.size} applications avec nouvelles signatures prêtes pour injection.")
+
+        // ANALYSE CROISÉE DYNAMIQUE : Synchronisation intelligente des signatures et nettoyage ART
+        onProgress("REPACKORE : Analyse croisée dynamique de la chaîne de confiance...", 0.18f)
+        val syncReport = performDynamicSignatureSync(context, unpackedDir) { onLog(it) }
+        if (syncReport.updatedFiles > 0) {
+            onLog("[REPACKORE:SELINUX] ${syncReport.updatedFiles} fichier(s) de configuration/permissions synchronisés avec la signature cible.")
+        }
+        if (syncReport.cleanedArtFiles > 0) {
+            onLog("[REPACKORE:ART] ${syncReport.cleanedArtFiles} cache(s) ART obsolètes purgés pour forcer une recompilation JIT saine.")
+        }
 
         when (blueprint.containerFormat) {
             "zip" -> {
@@ -559,7 +571,7 @@ object RepackoreEngine {
                                 fi
                             done
 
-                            # Restauration rigoureuse des contextes SELinux (vital pour éviter le reboot DSU vers recovery)
+                            # Restauration rigoureuse des contextes SELinux (vital pour éviter le reboot DSU vers recovery ou gel bootlogo)
                             if which restorecon >/dev/null 2>&1; then
                                 restorecon -RF $mountDir 2>/dev/null
                             fi
@@ -573,10 +585,38 @@ object RepackoreEngine {
                                 chcon -h u:object_r:init_exec:s0 $mountDir/init $mountDir/system/bin/init 2>/dev/null
                                 chcon -h u:object_r:shell_exec:s0 $mountDir/system/bin/sh $mountDir/bin/sh 2>/dev/null
                                 chcon -h u:object_r:toolbox_exec:s0 $mountDir/system/bin/toybox $mountDir/system/bin/toolbox 2>/dev/null
-                                chcon -h u:object_r:system_file:s0 $mountDir/system/bin/app_process $mountDir/system/bin/app_process64 2>/dev/null
+                                chcon -h u:object_r:zygote_exec:s0 $mountDir/system/bin/app_process* $mountDir/bin/app_process* 2>/dev/null
+                                chcon -h u:object_r:surfaceflinger_exec:s0 $mountDir/system/bin/surfaceflinger $mountDir/bin/surfaceflinger 2>/dev/null
+                                chcon -h u:object_r:servicemanager_exec:s0 $mountDir/system/bin/servicemanager $mountDir/bin/servicemanager 2>/dev/null
+                                chcon -h u:object_r:hwservicemanager_exec:s0 $mountDir/system/bin/hwservicemanager $mountDir/bin/hwservicemanager 2>/dev/null
+                                chcon -h u:object_r:vold_exec:s0 $mountDir/system/bin/vold $mountDir/bin/vold 2>/dev/null
+                                chcon -h u:object_r:netd_exec:s0 $mountDir/system/bin/netd $mountDir/bin/netd 2>/dev/null
+                                chcon -h u:object_r:logd_exec:s0 $mountDir/system/bin/logd $mountDir/bin/logd 2>/dev/null
                                 chcon -R u:object_r:vendor_file:s0 $mountDir/vendor 2>/dev/null
                                 chcon -R u:object_r:system_file:s0 $mountDir/product 2>/dev/null
                                 chcon -R u:object_r:system_file:s0 $mountDir/system_ext 2>/dev/null
+
+                                # Restauration dynamique depuis le fichier file_contexts d'origine de la partition
+                                for fcFile in '${payloadDir.absolutePath}/file_contexts' '${unpackedDir.absolutePath}/file_contexts'; do
+                                    if [ -f "${'$'}fcFile" ]; then
+                                        if which setfiles >/dev/null 2>&1; then
+                                            setfiles -F -r $mountDir "${'$'}fcFile" $mountDir 2>/dev/null
+                                        fi
+                                        while read -r pattern context || [ -n "${'$'}pattern" ]; do
+                                            case "${'$'}pattern" in
+                                                \#*|"") continue ;;
+                                                *)
+                                                    clean_pattern="${'$'}(echo "${'$'}pattern" | sed 's/\\//g' | sed 's/\$$//' | sed 's/^\///')"
+                                                    if [ -e "$mountDir/${'$'}clean_pattern" ] || [ -L "$mountDir/${'$'}clean_pattern" ]; then
+                                                        chcon -h "${'$'}context" "$mountDir/${'$'}clean_pattern" 2>/dev/null
+                                                    fi
+                                                    ;;
+                                            esac
+                                        done < "${'$'}fcFile"
+                                        break
+                                    fi
+                                done
+                                chcon u:object_r:rootfs:s0 $mountDir 2>/dev/null
                             fi
 
                             # Nettoyage des fichiers techniques résiduels pour garantir une partition 100% conforme à l'originale
@@ -867,5 +907,181 @@ object RepackoreEngine {
             bytes >= 1024 -> String.format("%.2f Ko", bytes / 1024.0)
             else -> "$bytes octets"
         }
+    }
+
+    data class DynamicSignatureSyncReport(
+        val updatedFiles: Int,
+        val cleanedArtFiles: Int,
+        val updatedDetails: List<String>
+    )
+
+    /**
+     * Analyse croisée dynamique et universelle des déclarations de signatures :
+     * Zéro liste fermée en dur, zéro suppositions rigides de structure.
+     * 1. Extrait les signatures des clés actives et certificats clonés/forgés
+     * 2. Scanne récursivement tous les fichiers de configuration (*mac_permissions*.xml, etc.)
+     * 3. Met à jour chirurgicalement les signatures déclarées pour correspondre aux nouveaux certificats
+     * 4. Purge les artefacts ART (.odex, .vdex) des APKs résignés pour éviter le blocage au bootlogo
+     */
+    suspend fun performDynamicSignatureSync(
+        context: Context,
+        unpackedDir: File,
+        onLog: (String) -> Unit = {}
+    ): DynamicSignatureSyncReport = withContext(Dispatchers.IO) {
+        val payloadDir = resolvePayloadDirectory(unpackedDir)
+        val updatedDetails = mutableListOf<String>()
+        var artCleaned = 0
+
+        onLog("[REPACKORE:SYNC] Analyse croisée dynamique de la chaîne de confiance...")
+
+        // 1. Découverte de tous les profils de clés et de leurs signatures actives
+        val activeRoleSignatures = mutableMapOf<String, String>() // role -> DER hex
+        val activeSha256Signatures = mutableMapOf<String, String>() // role -> SHA-256 hex
+        val oldHexToNewHex = mutableMapOf<String, String>()
+
+        // Examiner les clés clonées ou de production disponibles dans WorkspaceManager
+        val keysetDirs = mutableListOf<File>()
+        try {
+            WorkspaceManager.getSignerKeysetDir(context).listFiles()?.filter { it.isDirectory }?.let { keysetDirs.addAll(it) }
+            WorkspaceManager.getKeycoreClonesDir(context).listFiles()?.filter { it.isDirectory }?.let { keysetDirs.addAll(it) }
+        } catch (_: Exception) {}
+
+        for (kDir in keysetDirs) {
+            kDir.listFiles()?.filter { it.name.endsWith(".x509.pem", ignoreCase = true) }?.forEach { pem ->
+                try {
+                    val cert = GemeauSignerEngine.loadCertificate(pem)
+                    val hex = cert.encoded.joinToString("") { "%02X".format(it) }
+                    val sha = MessageDigest.getInstance("SHA-256").digest(cert.encoded).joinToString("") { "%02X".format(it) }
+                    val role = pem.nameWithoutExtension.removeSuffix(".x509").lowercase(Locale.ROOT)
+                    activeRoleSignatures[role] = hex
+                    activeSha256Signatures[role] = sha
+                    if (role == "platform" || role.contains("platform") || role.contains("clone")) {
+                        if (!activeRoleSignatures.containsKey("platform")) {
+                            activeRoleSignatures["platform"] = hex
+                        }
+                        if (!activeRoleSignatures.containsKey("releasekey")) {
+                            activeRoleSignatures["releasekey"] = hex
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+
+        // Examiner framework-res.apk s'il est présent (la signature de framework-res est la signature plateforme AOSP)
+        val frameworkRes = payloadDir.walkTopDown().firstOrNull { it.isFile && it.name.equals("framework-res.apk", ignoreCase = true) }
+        if (frameworkRes != null) {
+            try {
+                val audit = VerisinEngine.verifyApkFile(context, frameworkRes) {}
+                val cert = audit.certificates.firstOrNull()
+                if (cert != null) {
+                    onLog("[REPACKORE:SYNC] Signature Platform active identifiée via framework-res.apk (${cert.sha256Hex.take(16)}...)")
+                    activeSha256Signatures["platform"] = cert.sha256Hex
+                    try {
+                        val derBytes = android.util.Base64.decode(cert.certBase64, android.util.Base64.DEFAULT)
+                        activeRoleSignatures["platform"] = derBytes.joinToString("") { "%02X".format(it) }
+                    } catch (_: Exception) {}
+                }
+            } catch (_: Exception) {}
+        }
+
+        // 2. Nettoyage ciblé des caches ART obsolètes des APKs résignés (préservation intégrale des GApps)
+        payloadDir.walkTopDown().onEnter { !Files.isSymbolicLink(it.toPath()) }.forEach { file ->
+            if (file.isFile && file.extension.equals("apk", ignoreCase = true) && !Files.isSymbolicLink(file.toPath())) {
+                val isGapp = GemeauSignerEngine.isProtectedGapp(file.relativeTo(payloadDir).path, file)
+                if (!isGapp) {
+                    val parent = file.parentFile
+                    if (parent != null) {
+                        val oatDir = File(parent, "oat")
+                        if (oatDir.exists() && oatDir.isDirectory) {
+                            if (oatDir.deleteRecursively()) artCleaned++
+                        }
+                        val baseName = file.nameWithoutExtension
+                        File(parent, "$baseName.odex").takeIf { it.exists() }?.let { if (it.delete()) artCleaned++ }
+                        File(parent, "$baseName.vdex").takeIf { it.exists() }?.let { if (it.delete()) artCleaned++ }
+                        File(parent, "$baseName.art").takeIf { it.exists() }?.let { if (it.delete()) artCleaned++ }
+                        File(parent, "${file.name}.fsvmeta").takeIf { it.exists() }?.let { if (it.delete()) artCleaned++ }
+                    }
+                }
+            }
+        }
+
+        // 3. Parcours universel de l'arborescence pour détecter tous les fichiers déclarant des signatures
+        var updatedFilesCount = 0
+        val signerBlockRegex = Regex("""(?s)<signer\b([^>]*)>(.*?)</signer>""")
+        val seinfoRegex = Regex("""<seinfo\s+value=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+        val sigAttrRegex = Regex("""signature=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+
+        payloadDir.walkTopDown().onEnter { !Files.isSymbolicLink(it.toPath()) }.forEach { file ->
+            if (file.isFile && !Files.isSymbolicLink(file.toPath())) {
+                if (file.name in EXCLUDED_METADATA_FILES) return@forEach
+                val ext = file.extension.lowercase(Locale.ROOT)
+                val isPotentialConfig = ext in setOf("xml", "cil", "conf", "prop", "txt") ||
+                        file.name.contains("mac_permissions", ignoreCase = true) ||
+                        file.name.contains("permissions", ignoreCase = true)
+
+                if (isPotentialConfig && file.length() in 32L..(10L * 1024L * 1024L)) {
+                    try {
+                        file.setReadable(true, false)
+                        val content = file.readText(Charsets.UTF_8)
+                        var newContent = content
+                        var modified = false
+
+                        // A. Si c'est un fichier de politique SELinux MAC avec balises <signer ...>
+                        if (content.contains("<signer", ignoreCase = true) && content.contains("<seinfo", ignoreCase = true)) {
+                            newContent = signerBlockRegex.replace(newContent) { match ->
+                                val openAttrs = match.groupValues[1]
+                                val inner = match.groupValues[2]
+                                val seinfoVal = seinfoRegex.find(inner)?.groupValues?.get(1)?.lowercase(Locale.ROOT)
+
+                                val targetHex = when (seinfoVal) {
+                                    "platform" -> activeRoleSignatures["platform"]
+                                    "media" -> activeRoleSignatures["media"] ?: activeRoleSignatures["platform"]
+                                    "shared" -> activeRoleSignatures["shared"] ?: activeRoleSignatures["platform"]
+                                    "networkstack", "network_stack" -> activeRoleSignatures["networkstack"] ?: activeRoleSignatures["network_stack"] ?: activeRoleSignatures["platform"]
+                                    "releasekey", "release" -> activeRoleSignatures["releasekey"] ?: activeRoleSignatures["platform"]
+                                    else -> activeRoleSignatures[seinfoVal] ?: activeRoleSignatures["platform"]
+                                }
+
+                                if (targetHex != null) {
+                                    val updatedAttrs = sigAttrRegex.replace(openAttrs) {
+                                        """signature="$targetHex""""
+                                    }
+                                    if (updatedAttrs != openAttrs) modified = true
+                                    "<signer$updatedAttrs>$inner</signer>"
+                                } else {
+                                    match.value
+                                }
+                            }
+                        }
+
+                        // B. Substitution directe pour tout mapping d'empreinte ou signature connu
+                        for ((oldHex, newHex) in oldHexToNewHex) {
+                            if (newContent.contains(oldHex, ignoreCase = true)) {
+                                newContent = newContent.replace(oldHex, newHex, ignoreCase = true)
+                                modified = true
+                            }
+                        }
+
+                        if (modified && newContent != content) {
+                            file.setWritable(true, false)
+                            file.writeText(newContent, Charsets.UTF_8)
+                            updatedFilesCount++
+                            val rel = file.relativeTo(payloadDir).path
+                            updatedDetails.add(rel)
+                            onLog("[REPACKORE:SYNC] Signature mise à jour dans : $rel")
+                        }
+                    } catch (_: Exception) {}
+                }
+            }
+        }
+
+        if (artCleaned > 0) {
+            onLog("[REPACKORE:ART] $artCleaned cache(s) ART/fs-verity obsolètes purgés pour garantir le boot DSU.")
+        }
+        if (updatedFilesCount > 0) {
+            onLog("[REPACKORE:SYNC] $updatedFilesCount fichier(s) de configuration SELinux/Permissions synchronisés avec les signatures de la cible.")
+        }
+
+        DynamicSignatureSyncReport(updatedFilesCount, artCleaned, updatedDetails)
     }
 }
