@@ -3,6 +3,7 @@ package com.example.data
 import android.content.Context
 import com.example.model.PartitionInfo
 import com.example.model.RomTargetType
+import com.example.model.SignalabScanBlueprint
 import com.example.model.TargetMetadata
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
@@ -494,6 +495,7 @@ object UkaEngine {
 
             // Write reconstructed image headers using real partition data if available
             writeReconstructedImage(
+                context = context,
                 outputFile = outputFile,
                 targetName = targetName,
                 sourceTargetDir = sourceTargetDir,
@@ -1129,6 +1131,7 @@ object UkaEngine {
     }
 
     private suspend fun writeReconstructedImage(
+        context: Context,
         outputFile: File,
         targetName: String,
         sourceTargetDir: File,
@@ -1142,138 +1145,31 @@ object UkaEngine {
             outputFile.parentFile.mkdirs()
         }
 
-        var toolSuccess = false
-        val isRooted = RootChecker.checkRoot().isRooted
-
-        // 1. Try native kitchen compilation tools if present
-        if (effectiveFormat.contains("EROFS", ignoreCase = true)) {
-            try {
-                val mkfsCmd = "mkfs.erofs -z lz4hc '${outputFile.absolutePath}' '${sourceTargetDir.absolutePath}'"
-                val res = if (isRooted) {
-                    RootDelegator.executePrivilegedCommand(mkfsCmd) { line -> onLog("[mkfs.erofs] $line") }
-                } else {
-                    val p = Runtime.getRuntime().exec(arrayOf("sh", "-c", mkfsCmd))
-                    p.waitFor()
-                }
-                if (res == 0 && outputFile.exists() && outputFile.length() > 1024) {
-                    toolSuccess = true
-                    onLog("[REPACK EROFS] Image EROFS assemblée avec succès (${formatFileSize(outputFile.length())}) !")
-                }
-            } catch (_: Exception) {}
-        } else if (effectiveFormat.contains("EXT4", ignoreCase = true)) {
-            try {
-                val ext4Cmd = "mke2fs -t ext4 -b 4096 '${outputFile.absolutePath}' 2>/dev/null || make_ext4fs -l 3221225472 '${outputFile.absolutePath}' '${sourceTargetDir.absolutePath}'"
-                val res = if (isRooted) {
-                    RootDelegator.executePrivilegedCommand(ext4Cmd) { line -> onLog("[EXT4] $line") }
-                } else {
-                    val p = Runtime.getRuntime().exec(arrayOf("sh", "-c", ext4Cmd))
-                    p.waitFor()
-                }
-                if (res == 0 && outputFile.exists() && outputFile.length() > 1024) {
-                    toolSuccess = true
-                    onLog("[REPACK EXT4] Image EXT4 assemblée avec succès (${formatFileSize(outputFile.length())}) !")
-                }
-            } catch (_: Exception) {}
+        val formatKey = when {
+            effectiveFormat.contains("EROFS", ignoreCase = true) -> "erofs"
+            effectiveFormat.contains("ZIP", ignoreCase = true) -> "zip"
+            else -> "ext4"
         }
 
-        // 2. Fallback to autonomous block synthesis via REPACKORE or container reconstruction
-        if (!toolSuccess) {
-            val nonImgFiles = sourceTargetDir.walkTopDown()
-                .onEnter { dir ->
-                    try {
-                        !Files.isSymbolicLink(dir.toPath())
-                    } catch (e: Exception) {
-                        false
-                    }
-                }
-                .filter {
-                    try {
-                        !Files.isSymbolicLink(it.toPath()) && it.isFile && !it.name.endsWith(".img")
-                    } catch (e: Exception) {
-                        false
-                    }
-                }
-                .toList()
+        val blueprint = SignalabScanBlueprint(
+            sourceFilePath = metadata?.targetName ?: targetName,
+            sourceFileName = targetName,
+            sourceFileSize = metadata?.fileSizeBytes ?: (sourceTargetDir.walkTopDown().filter { it.isFile }.sumOf { it.length() } * 11 / 10),
+            containerFormat = formatKey,
+            partitionName = targetName,
+            unpackedDirPath = sourceTargetDir.absolutePath,
+            scanTimestamp = System.currentTimeMillis()
+        )
 
-            if (nonImgFiles.isNotEmpty()) {
-                onLog("[REPACK] Détection de ${nonImgFiles.size} fichiers décompactés/modifiés. Synthèse active de partition via REPACKORE...")
-                val targetSize = metadata?.fileSizeBytes ?: (nonImgFiles.sumOf { it.length() } * 11 / 10).coerceAtLeast(16 * 1024 * 1024L)
-                RepackoreEngine.assembleAutonomousExt4Image(
-                    unpackedDir = sourceTargetDir,
-                    outputFile = outputFile,
-                    targetTotalBytes = targetSize,
-                    onLog = onLog
-                )
-            } else {
-                val candidateImg = sourceTargetDir.walkTopDown()
-                    .onEnter { dir ->
-                        try {
-                            !Files.isSymbolicLink(dir.toPath())
-                        } catch (e: Exception) {
-                            false
-                        }
-                    }
-                    .firstOrNull {
-                        try {
-                            !Files.isSymbolicLink(it.toPath()) && it.isFile && it.name.endsWith(".img") && it.length() > 1024 && it.absolutePath != outputFile.absolutePath
-                        } catch (e: Exception) {
-                            false
-                        }
-                    }
-                if (candidateImg != null) {
-                    onLog("[REPACK] Reconstruction à partir des blocs de partition réels (${formatFileSize(candidateImg.length())})...")
-                    val buf = ByteArray(4 * 1024 * 1024)
-                    val totalBytes = candidateImg.length()
-                    var totalCopied = 0L
-                    var lastNotified = 0L
-                    FileInputStream(candidateImg).use { src ->
-                        FileOutputStream(outputFile).use { dst ->
-                            while (true) {
-                                val r = src.read(buf)
-                                if (r == -1) break
-                                dst.write(buf, 0, r)
-                                totalCopied += r
-                                if (totalCopied - lastNotified >= 100 * 1024 * 1024 || totalCopied == totalBytes) {
-                                    lastNotified = totalCopied
-                                    val pct = (totalCopied.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f)
-                                    val mbCopied = totalCopied / (1024 * 1024)
-                                    val mbTotal = totalBytes / (1024 * 1024)
-                                    onLog("[REPACK BLOCS] $mbCopied / $mbTotal Mo réassemblés (${(pct * 100).toInt()}%)")
-                                }
-                            }
-                        }
-                    }
-                } else {
-
-                onLog("[REPACK] Génération du conteneur d'image aligné sur les descripteurs UKA...")
-                FileOutputStream(outputFile).use { fos ->
-                    val buf = ByteBuffer.allocate(128).order(ByteOrder.LITTLE_ENDIAN)
-                    if (enableSparse || metadata?.isSparse == true) {
-                        buf.putInt(ANDROID_SPARSE_MAGIC)
-                        buf.putShort(1)
-                        buf.putShort(0)
-                        buf.putShort(28)
-                        buf.putShort(12)
-                        buf.putInt(metadata?.blockSize ?: 4096)
-                        buf.putInt(1024)
-                        buf.putInt(2)
-                    } else {
-                        buf.put(CRAU_MAGIC.toByteArray(Charsets.US_ASCII))
-                        buf.putInt(0x00000001)
-                    }
-                    fos.write(buf.array())
-                    val contentSize = (metadata?.fileSizeBytes ?: (1024L * 1024L * 2L)).coerceIn(1024L * 64L, 1024L * 1024L * 8L)
-                    val chunk = ByteArray(4096) { 0x55.toByte() }
-                    var written = 128L
-                    while (written < contentSize) {
-                        val toWrite = minOf(chunk.size.toLong(), contentSize - written).toInt()
-                        fos.write(chunk, 0, toWrite)
-                        written += toWrite
-                    }
-                }
-            }
-        }
-    }
+        onLog("[REPACK] Reconstitution souveraine et intégrale via le moteur REPACKORE...")
+        RepackoreEngine.compilePartitionImage(
+            context = context,
+            unpackedDir = sourceTargetDir,
+            blueprint = blueprint,
+            outputFile = outputFile,
+            onProgress = { step, _ -> onLog("[$step]") },
+            onLog = onLog
+        )
 
 
 
