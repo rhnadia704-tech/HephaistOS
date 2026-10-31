@@ -19,6 +19,7 @@ import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.file.Files
+import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -295,6 +296,17 @@ object SignalabEngine {
             val sigAlg = firstCert?.sigAlgName ?: "SHA256withRSA"
             val schemes = firstResult.schemesDisplay
 
+            val certDerHex = if (firstCert?.certBase64.isNullOrBlank()) "" else {
+                try {
+                    val rawBytes = try {
+                        java.util.Base64.getDecoder().decode(firstCert!!.certBase64.replace("\n", "").trim())
+                    } catch (_: Exception) {
+                        android.util.Base64.decode(firstCert!!.certBase64, android.util.Base64.DEFAULT)
+                    }
+                    rawBytes.joinToString("") { "%02X".format(it) }
+                } catch (_: Exception) { "" }
+            }
+
             val associatedRelPaths = appPairs.map { it.first.relativeTo(unpackDir).path }
 
             // Determine role intelligently
@@ -314,7 +326,8 @@ object SignalabEngine {
                 sigAlgName = sigAlg,
                 schemesDisplay = schemes,
                 isGoogleServices = isGoogle,
-                associatedApks = associatedRelPaths
+                associatedApks = associatedRelPaths,
+                certDerHex = certDerHex
             )
             finalClusters.add(clusterObj)
 
@@ -527,7 +540,7 @@ object SignalabEngine {
 
         // 3.4 Synchronisation des permissions XML
         onProgress("Synchronisation des déclarations de permissions XML...", 0.78f)
-        synchronizePermissionsXml(unpackDir, forgedKeysets, onLog)
+        synchronizePermissionsXml(context, unpackDir, forgedKeysets, scanResult, onLog)
 
         // 3.5 Recompilation Haute Précision via le moteur REPACKORE
         onProgress("REPACKORE : Recompilation et synthèse de la partition...", 0.82f)
@@ -751,9 +764,168 @@ object SignalabEngine {
         onLog("[CONSEIL SOUVERAIN] Le système déclenchera une compilation dexopt runtime propre au premier démarrage.")
     }
 
-    private fun synchronizePermissionsXml(rootDir: File, forgedKeysets: Map<String, File>, onLog: (String) -> Unit) {
-        // Scan and update permission tags if relevant
-        onLog("[SYNCHRONISATION PERMISSIONS] Alignement des empreintes cryptographiques dans /etc/permissions/...")
+    private suspend fun synchronizePermissionsXml(
+        context: Context,
+        rootDir: File,
+        forgedKeysets: Map<String, File>,
+        scanResult: SignalabScanResult,
+        onLog: (String) -> Unit
+    ) {
+        onLog("=================================================================")
+        onLog("[SELINUX/PERMISSIONS] Analyse et synchronisation automatique des signatures...")
+
+        // 1. Dériver les correspondances de signatures (nouvelles et originales)
+        val roleToNewHex = mutableMapOf<String, String>()
+        val roleToNewSha256 = mutableMapOf<String, String>()
+        val oldHexToNewHex = mutableMapOf<String, String>()
+        val oldSha256ToNewSha256 = mutableMapOf<String, String>()
+
+        for (cluster in scanResult.clusters) {
+            val keysetDir = forgedKeysets[cluster.clusterId] ?: continue
+            val pemFile = keysetDir.listFiles()?.firstOrNull { it.name.endsWith(".x509.pem", ignoreCase = true) } ?: continue
+            val newCert = try { GemeauSignerEngine.loadCertificate(pemFile) } catch (_: Exception) { null } ?: continue
+
+            val newHex = newCert.encoded.joinToString("") { "%02X".format(it) }
+            val newSha256 = MessageDigest.getInstance("SHA-256").digest(newCert.encoded).joinToString("") { "%02X".format(it) }
+
+            val normalizedRole = cluster.clusterRole.lowercase(Locale.ROOT)
+            roleToNewHex[normalizedRole] = newHex
+            roleToNewSha256[normalizedRole] = newSha256
+            if (normalizedRole == "platform") {
+                roleToNewHex["releasekey"] = newHex
+                roleToNewSha256["releasekey"] = newSha256
+            }
+
+            // Empreinte SHA-256 originale
+            if (cluster.certificateFingerprintSha256.isNotBlank()) {
+                val cleanOldSha = cluster.certificateFingerprintSha256.replace(":", "").trim()
+                oldSha256ToNewSha256[cleanOldSha.uppercase(Locale.ROOT)] = newSha256
+                oldSha256ToNewSha256[cleanOldSha.lowercase(Locale.ROOT)] = newSha256.lowercase(Locale.ROOT)
+            }
+
+            // Certificat DER Hex original
+            if (cluster.certDerHex.isNotBlank()) {
+                oldHexToNewHex[cluster.certDerHex.uppercase(Locale.ROOT)] = newHex
+                oldHexToNewHex[cluster.certDerHex.lowercase(Locale.ROOT)] = newHex.lowercase(Locale.ROOT)
+            }
+        }
+
+        onLog("[SELINUX/PERMISSIONS] ${roleToNewHex.size} profil(s) de clé et ${oldHexToNewHex.size} signature(s) mappés pour l'alignement.")
+
+        // 2. Parcourir toute l'arborescence à la recherche des fichiers de permissions SELinux et Android
+        var updatedCount = 0
+        val targetFiles = rootDir.walkTopDown()
+            .onEnter { !Files.isSymbolicLink(it.toPath()) }
+            .filter { file ->
+                file.isFile && !Files.isSymbolicLink(file.toPath()) &&
+                (file.name.contains("mac_permissions", ignoreCase = true) ||
+                 (file.name.endsWith(".xml", ignoreCase = true) && 
+                  (file.parentFile?.name.equals("permissions", ignoreCase = true) || 
+                   file.parentFile?.name.equals("selinux", ignoreCase = true) ||
+                   file.name.startsWith("privapp-permissions", ignoreCase = true))))
+            }
+            .toList()
+
+        for (file in targetFiles) {
+            try {
+                file.setReadable(true, false)
+                val originalText = file.readText(Charsets.UTF_8)
+                var modifiedText = originalText
+
+                // Traitement pour les politiques SELinux MAC (*mac_permissions*.xml)
+                if (file.name.contains("mac_permissions", ignoreCase = true)) {
+                    val signerBlockRegex = Regex("""(?s)<signer\b([^>]*)>(.*?)</signer>""")
+                    val seinfoRegex = Regex("""<seinfo\s+value=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+                    val sigAttrRegex = Regex("""signature=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+
+                    modifiedText = signerBlockRegex.replace(modifiedText) { matchResult ->
+                        val openTagAttrs = matchResult.groupValues[1]
+                        val innerContent = matchResult.groupValues[2]
+
+                        // Détection du seinfo (platform, media, shared, etc.)
+                        val seinfoMatch = seinfoRegex.find(innerContent)
+                        val seinfoVal = seinfoMatch?.groupValues?.get(1)?.lowercase(Locale.ROOT)
+
+                        val primaryHex = roleToNewHex["platform"] ?: roleToNewHex.values.firstOrNull()
+                        val newHex = when (seinfoVal) {
+                            "platform" -> roleToNewHex["platform"] ?: primaryHex
+                            "media" -> roleToNewHex["media"] ?: roleToNewHex["platform"] ?: primaryHex
+                            "shared" -> roleToNewHex["shared"] ?: roleToNewHex["platform"] ?: primaryHex
+                            "networkstack", "network_stack" -> roleToNewHex["networkstack"] ?: roleToNewHex["network_stack"] ?: roleToNewHex["platform"] ?: primaryHex
+                            "releasekey", "release" -> roleToNewHex["releasekey"] ?: roleToNewHex["platform"] ?: primaryHex
+                            else -> roleToNewHex[seinfoVal] ?: primaryHex
+                        }
+
+                        if (newHex != null) {
+                            val updatedAttrs = sigAttrRegex.replace(openTagAttrs) {
+                                """signature="$newHex""""
+                            }
+                            "<signer$updatedAttrs>$innerContent</signer>"
+                        } else {
+                            matchResult.value
+                        }
+                    }
+                }
+
+                // Remplacement universel des signatures hex de certificats identifiés
+                for ((oldHex, newHex) in oldHexToNewHex) {
+                    if (modifiedText.contains(oldHex, ignoreCase = true)) {
+                        modifiedText = modifiedText.replace(oldHex, newHex, ignoreCase = true)
+                    }
+                }
+
+                // Remplacement universel des digests SHA-256 dans les balises certDigest
+                for ((oldSha, newSha) in oldSha256ToNewSha256) {
+                    if (modifiedText.contains(oldSha, ignoreCase = true)) {
+                        modifiedText = modifiedText.replace(oldSha, newSha, ignoreCase = true)
+                    }
+                }
+
+                if (modifiedText != originalText) {
+                    file.setWritable(true, false)
+                    file.writeText(modifiedText, Charsets.UTF_8)
+                    updatedCount++
+                    onLog("[SELINUX/PERMISSIONS] ${file.relativeTo(rootDir).path} synchronisé avec succès.")
+                }
+            } catch (e: Exception) {
+                onLog("[AVERTISSEMENT] Erreur alignement permissions sur ${file.name} : ${e.message}")
+            }
+        }
+
+        // 3. Mise à jour automatique de otacerts.zip si présent
+        val otaFiles = rootDir.walkTopDown()
+            .onEnter { !Files.isSymbolicLink(it.toPath()) }
+            .filter { it.isFile && it.name.equals("otacerts.zip", ignoreCase = true) }
+            .toList()
+
+        val platformPemFile = forgedKeysets.values.mapNotNull { dir ->
+            dir.listFiles()?.firstOrNull { it.name.endsWith(".x509.pem", ignoreCase = true) }
+        }.firstOrNull()
+
+        if (platformPemFile != null && platformPemFile.exists()) {
+            for (otaZip in otaFiles) {
+                try {
+                    otaZip.setWritable(true, false)
+                    val tempOta = File(otaZip.parentFile, "otacerts_temp.zip")
+                    ZipOutputStream(FileOutputStream(tempOta)).use { zos ->
+                        val entry = ZipEntry("releasekey.x509.pem")
+                        zos.putNextEntry(entry)
+                        zos.write(platformPemFile.readBytes())
+                        zos.closeEntry()
+                    }
+                    if (tempOta.exists() && tempOta.length() > 0) {
+                        otaZip.delete()
+                        tempOta.renameTo(otaZip)
+                        onLog("[OTA CERTS] ${otaZip.relativeTo(rootDir).path} synchronisé avec le certificat Platform.")
+                    }
+                } catch (e: Exception) {
+                    onLog("[AVERTISSEMENT] Erreur mise à jour otacerts.zip : ${e.message}")
+                }
+            }
+        }
+
+        onLog("[SELINUX/PERMISSIONS TERMINÉ] $updatedCount fichier(s) de politique et de permissions synchronisés.")
+        onLog("=================================================================")
     }
 }
 

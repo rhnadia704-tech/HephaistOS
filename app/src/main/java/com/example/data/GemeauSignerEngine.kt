@@ -1142,26 +1142,24 @@ object GemeauSignerEngine {
             onLog("[SELINUX] Signature Platform mise à jour : ${it.take(24)}... (seinfo=platform préservé)")
         }
 
-        // Update XML on disk if ROM is an unpacked directory
-        if (isDirectoryRom) {
-            romFile.walkTopDown().forEach { file ->
-                if (file.isFile && file.name.endsWith("mac_permissions.xml", ignoreCase = true)) {
+        // Update XML on disk if ROM is an unpacked directory or extracted workspace
+        val dirsToPatch = mutableListOf<File>()
+        if (isDirectoryRom) dirsToPatch.add(romFile)
+        val unpackedDir = File(WorkspaceManager.getUnpackedDir(context), romFile.nameWithoutExtension)
+        if (unpackedDir.exists() && unpackedDir.isDirectory) dirsToPatch.add(unpackedDir)
+
+        for (dir in dirsToPatch) {
+            dir.walkTopDown().forEach { file ->
+                if (file.isFile && file.name.contains("mac_permissions", ignoreCase = true) && file.name.endsWith(".xml", ignoreCase = true)) {
                     try {
-                        file.writeText(updatedMacXml)
-                        onLog("[SELINUX] Fichier direct ${file.relativeTo(romFile).path} mis à jour avec la politique préservée")
+                        val originalText = file.readText(Charsets.UTF_8)
+                        val patchedText = patchMacPermissionsXml(originalText, keyHexSignatures)
+                        if (patchedText != originalText) {
+                            file.setWritable(true, false)
+                            file.writeText(patchedText)
+                            onLog("[SELINUX] Fichier ${file.relativeTo(dir).path} mis à jour avec les signatures préservées")
+                        }
                     } catch (_: Exception) {}
-                }
-            }
-        } else if (isImgRom) {
-            val unpackedDir = File(WorkspaceManager.getUnpackedDir(context), romFile.nameWithoutExtension)
-            if (unpackedDir.exists() && unpackedDir.isDirectory) {
-                unpackedDir.walkTopDown().forEach { file ->
-                    if (file.isFile && file.name.endsWith("mac_permissions.xml", ignoreCase = true)) {
-                        try {
-                            file.writeText(updatedMacXml)
-                            onLog("[SELINUX] Fichier ${file.relativeTo(unpackedDir).path} mis à jour dans UNPACKED/")
-                        } catch (_: Exception) {}
-                    }
                 }
             }
         }
@@ -2256,10 +2254,22 @@ object GemeauSignerEngine {
         onLog("[SELINUX] mac_permissions.xml mis à jour avec les signatures du nouveau trousseau.")
 
         // Update on disk if unpacked
-        if (isDir) {
-            targetFile.walkTopDown().forEach { file ->
-                if (file.isFile && file.name.equals("mac_permissions.xml", ignoreCase = true)) {
-                    file.writeText(updatedMacXml)
+        val targetDirs = mutableListOf<File>()
+        if (isDir) targetDirs.add(targetFile)
+        val unp = File(WorkspaceManager.getUnpackedDir(context), targetFile.nameWithoutExtension)
+        if (unp.exists()) targetDirs.add(unp)
+
+        for (td in targetDirs) {
+            td.walkTopDown().forEach { file ->
+                if (file.isFile && file.name.contains("mac_permissions", ignoreCase = true) && file.name.endsWith(".xml", ignoreCase = true)) {
+                    try {
+                        val originalText = file.readText(Charsets.UTF_8)
+                        val patchedText = patchMacPermissionsXml(originalText, keyHexSignatures)
+                        if (patchedText != originalText) {
+                            file.setWritable(true, false)
+                            file.writeText(patchedText)
+                        }
+                    } catch (_: Exception) {}
                 }
             }
         }
@@ -2910,7 +2920,7 @@ object GemeauSignerEngine {
         }
     }
 
-    private fun loadCertificate(pemFile: File): X509Certificate {
+    internal fun loadCertificate(pemFile: File): X509Certificate {
         val text = pemFile.readText()
         val cleaned = text
             .replace("-----BEGIN CERTIFICATE-----", "")

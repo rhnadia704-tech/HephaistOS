@@ -424,8 +424,12 @@ object RepackoreEngine {
                 p.waitFor()
             }
             if (exitCode == 0 && outputFile.exists() && outputFile.length() > 4096L) {
+                try {
+                    val tuneCmd = "tune2fs -O ^has_journal -c 0 -i 0 '${outputFile.absolutePath}' 2>/dev/null; e2fsck -fy '${outputFile.absolutePath}' 2>/dev/null"
+                    if (isRooted) RootDelegator.executePrivilegedCommand(tuneCmd) {} else Runtime.getRuntime().exec(arrayOf("sh", "-c", tuneCmd)).waitFor()
+                } catch (_: Exception) {}
                 success = true
-                onLog("[REPACKORE:NATIVE] Partition EXT4 compilée avec succès via make_ext4fs.")
+                onLog("[REPACKORE:NATIVE] Partition EXT4 compilée avec succès via make_ext4fs (mode read-only sans journal).")
             }
         } catch (_: Exception) {}
 
@@ -433,16 +437,16 @@ object RepackoreEngine {
         if (!success && isRooted) {
             try {
                 onProgress("REPACKORE : Initialisation du conteneur de partition (${formatSize(targetSize)})...", 0.35f)
-                onLog("[REPACKORE:LOOP] Préparation du conteneur EXT4 de ${formatSize(targetSize)}...")
+                onLog("[REPACKORE:LOOP] Préparation du conteneur EXT4 de ${formatSize(targetSize)} (mode sans journal pour éliminer [SYS])...")
 
                 // Préallocation rapide du fichier cible
                 RandomAccessFile(outputFile, "rw").use { raf ->
                     raf.setLength(targetSize)
                 }
 
-                // Formatage EXT4 réel avec mke2fs
-                onProgress("REPACKORE : Formatage du système de fichiers EXT4...", 0.40f)
-                val fmtRes = RootDelegator.executePrivilegedCommand("mke2fs -F -t ext4 -b 4096 '${outputFile.absolutePath}'") { line ->
+                // Formatage EXT4 réel avec mke2fs sans journal (format natif Android GSI lecture seule)
+                onProgress("REPACKORE : Formatage du système de fichiers EXT4 (lecture seule, sans journal)...", 0.40f)
+                val fmtRes = RootDelegator.executePrivilegedCommand("mke2fs -F -t ext4 -b 4096 -O ^has_journal,extent,huge_file,flex_bg,uninit_bg,dir_nlink,extra_isize -m 0 '${outputFile.absolutePath}'") { line ->
                     onLog("[mke2fs] $line")
                 }
 
@@ -500,6 +504,9 @@ object RepackoreEngine {
                             if [ -n "${'$'}LOOP" ]; then
                                 losetup -d "${'$'}LOOP" 2>/dev/null
                             fi
+                            # Suppression formelle du journal pour garantir zéro dossier [SYS] sous ZArchiver et boot intègre
+                            tune2fs -O ^has_journal -c 0 -i 0 '${outputFile.absolutePath}' 2>/dev/null
+                            e2fsck -fy '${outputFile.absolutePath}' 2>/dev/null
                             rm -rf $mountDir $shortLink 2>/dev/null
                             echo "HEPHAISTOS_REPACK_SUCCESS"
                         else

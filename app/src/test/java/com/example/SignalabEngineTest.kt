@@ -53,8 +53,8 @@ class SignalabEngineTest {
 
     private fun createDummyRomZip(destZip: File, apkFile1: File, apkFile2: File) {
         ZipOutputStream(FileOutputStream(destZip)).use { zos ->
-            // Entry 1: system/app/SampleApp1/SampleApp1.apk
-            val entry1 = ZipEntry("system/app/SampleApp1/SampleApp1.apk")
+            // Entry 1: system/framework/framework-res.apk (Core platform package)
+            val entry1 = ZipEntry("system/framework/framework-res.apk")
             zos.putNextEntry(entry1)
             zos.write(apkFile1.readBytes())
             zos.closeEntry()
@@ -77,6 +77,20 @@ class SignalabEngineTest {
             val entry4 = ZipEntry("system/app/SampleApp1/oat/arm64/SampleApp1.odex")
             zos.putNextEntry(entry4)
             zos.write(odexData)
+            zos.closeEntry()
+
+            // Entry 5: system/etc/selinux/plat_mac_permissions.xml
+            val platMacData = """
+                <?xml version="1.0" encoding="utf-8"?>
+                <policy>
+                    <signer signature="OLD_PLATFORM_SIGNATURE_HEX_1234567890">
+                        <seinfo value="platform" />
+                    </signer>
+                </policy>
+            """.trimIndent().toByteArray()
+            val entry5 = ZipEntry("system/etc/selinux/plat_mac_permissions.xml")
+            zos.putNextEntry(entry5)
+            zos.write(platMacData)
             zos.closeEntry()
         }
     }
@@ -173,6 +187,14 @@ class SignalabEngineTest {
             assertNotNull(repackedFile)
             assertTrue("Repacked file must exist", repackedFile.exists() && repackedFile.length() > 0)
             assertTrue("Repacked file must be in LABOUT", repackedFile.parentFile?.name == "LABOUT")
+
+            // Verify that plat_mac_permissions.xml in unpackDir was updated with new platform signature
+            val unpackDir = File(blueprint.unpackedDirPath)
+            val platMacFile = File(unpackDir, "system/etc/selinux/plat_mac_permissions.xml")
+            assertTrue("plat_mac_permissions.xml must exist", platMacFile.exists())
+            val platMacContent = platMacFile.readText()
+            assertTrue("Old signature must be replaced", !platMacContent.contains("OLD_PLATFORM_SIGNATURE_HEX_1234567890"))
+            assertTrue("seinfo platform must be preserved", platMacContent.contains("""seinfo value="platform""""))
         }
     }
 }

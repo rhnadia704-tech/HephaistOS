@@ -1,6 +1,6 @@
 {
-  "summary":  "Plan de correction structurelle du repack : détection automatique du dossier racine de la partition (mise à plat sans sous-dossier) et exclusion des fichiers techniques (symlinks.txt, fs_config, file_contexts) pour garantir une image conforme à 100% à la ROM d'origine.",
-  "updatedAt":  "2026-10-31T06:44:38.708318107Z",
+  "summary":  "Plan d'implémentation pour la synchronisation automatique des permissions SELinux/Android (plat_mac_permissions.xml et XMLs associés), la suppression de l'artefact journal [SYS] pour respecter la structure originale en lecture seule (ro), et la préservation de la structure et du boot DSU.",
+  "updatedAt":  "2026-10-31T09:22:11.924679656Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

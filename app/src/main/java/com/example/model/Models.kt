@@ -452,7 +452,8 @@ data class ApkSignatureCluster(
     val sigAlgName: String,
     val schemesDisplay: String,
     val isGoogleServices: Boolean = false,
-    val associatedApks: List<String> = emptyList() // Relative paths of APKs
+    val associatedApks: List<String> = emptyList(), // Relative paths of APKs
+    val certDerHex: String = "" // Empreinte hexadécimale brute (DER) du certificat original
 )
 
 enum class SignalabSignMode(val label: String, val description: String) {
@@ -467,6 +468,7 @@ data class SignalabSignOptions(
     val customCountry: String = "FR",
     val preserveGoogleApps: Boolean = true,
     val cleanArtArtifacts: Boolean = true, // Clear old odex/vdex/oat and fsvmeta to prevent bootloop
+    val patchAvb: Boolean = false, // Par défaut false (respect strict de la cible, pas de patch forcé)
     val outputFormat: String = "AUTO" // Auto-detect from blueprint
 )
 
