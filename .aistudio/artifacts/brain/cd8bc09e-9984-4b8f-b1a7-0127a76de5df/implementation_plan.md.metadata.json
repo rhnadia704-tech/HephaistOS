@@ -1,6 +1,6 @@
 {
-  "summary":  "Plan de restructuration complète du moteur de Repack (RepackoreEngine & UKA) pour éliminer les images vides et les blocages, garantissant une reconstitution 100% intégrale et fonctionnelle de tous les fichiers déballés dans la partition cible.",
-  "updatedAt":  "2026-10-31T05:58:42.004062873Z",
+  "summary":  "Plan de correction structurelle du repack : détection automatique du dossier racine de la partition (mise à plat sans sous-dossier) et exclusion des fichiers techniques (symlinks.txt, fs_config, file_contexts) pour garantir une image conforme à 100% à la ROM d'origine.",
+  "updatedAt":  "2026-10-31T06:44:38.708318107Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

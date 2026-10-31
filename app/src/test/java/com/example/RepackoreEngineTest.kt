@@ -206,5 +206,32 @@ class RepackoreEngineTest {
             baseDir.deleteRecursively()
         }
     }
+
+    @Test
+    fun testResolvePayloadDirectoryAndExcludeMetadata() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val baseDir = File(context.cacheDir, "test_repackore_nested_${System.currentTimeMillis()}").apply { mkdirs() }
+        
+        // Structure typique UNPACKED/Test/Test/system/...
+        val outerDir = File(baseDir, "Test").apply { mkdirs() }
+        val nestedPayload = File(outerDir, "Test").apply { mkdirs() }
+        val systemDir = File(nestedPayload, "system").apply { mkdirs() }
+        File(systemDir, "build.prop").writeText("ro.build.version.release=14")
+
+        // Fichiers techniques au niveau supérieur (doivent être exclus)
+        File(outerDir, "symlinks.txt").writeText("system/bin/sh -> /bin/toybox")
+        File(outerDir, "fs_config").writeText("system 0 0 755")
+        File(outerDir, "file_contexts").writeText("/system(/.*)? u:object_r:system_file:s0")
+
+        // 1. Vérifier que resolvePayloadDirectory cible bien le sous-dossier direct contenant les dossiers système
+        val resolved = RepackoreEngine.resolvePayloadDirectory(outerDir, "Test")
+        assertEquals("Le payload doit pointer sur le sous-dossier Test/ contenant system/", nestedPayload.absolutePath, resolved.absolutePath)
+
+        // 2. Vérifier que inspectUnpackedSchema exclut les fichiers de métadonnées
+        val schema = RepackoreEngine.inspectUnpackedSchema(outerDir, "ext4", "Test")
+        assertEquals("Seul le vrai payload system/build.prop doit être comptabilisé", 1, schema.totalFiles)
+
+        baseDir.deleteRecursively()
+    }
 }
 

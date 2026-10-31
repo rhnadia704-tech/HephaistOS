@@ -32,6 +32,52 @@ object RepackoreEngine {
     private const val ANDROID_SPARSE_MAGIC = 0xED26FF3A.toInt()
     private const val ZIP_MAGIC = 0x04034B50
 
+    val EXCLUDED_METADATA_FILES = setOf(
+        "symlinks.txt",
+        "fs_config",
+        "file_contexts",
+        "filesystem_tree.json",
+        "repack_blueprint.json",
+        "metadata.json"
+    )
+
+    /**
+     * Résout le véritable répertoire racine contenant les fichiers du système d'exploitation.
+     * Si unpackedDir contient un sous-dossier correspondant au nom de la partition ou contenant
+     * des répertoires système typiques (system, bin, etc, vendor, etc.), on cible ce sous-dossier
+     * pour que les fichiers soient placés directement à la racine de la partition compilée.
+     */
+    fun resolvePayloadDirectory(unpackedDir: File, partitionName: String = ""): File {
+        if (!unpackedDir.exists() || !unpackedDir.isDirectory) return unpackedDir
+
+        // 1. Sous-dossier direct portant le nom de la partition (ex: UNPACKED/Test/Test)
+        if (partitionName.isNotBlank()) {
+            val partSubDir = File(unpackedDir, partitionName)
+            if (partSubDir.exists() && partSubDir.isDirectory) {
+                return partSubDir
+            }
+        }
+
+        // 2. Recherche d'un sous-dossier contenant des dossiers système Android clés
+        val subDirs = unpackedDir.listFiles()?.filter { it.isDirectory && !it.name.startsWith(".") } ?: emptyList()
+        for (sub in subDirs) {
+            val subNames = sub.list()?.toSet() ?: emptySet()
+            if (subNames.any { it in setOf("system", "bin", "etc", "vendor", "app", "priv-app", "framework", "xbin", "system_ext") }) {
+                return sub
+            }
+        }
+
+        // 3. Si un seul sous-dossier existe (ex: UNPACKED/Test avec un seul sous-dossier)
+        if (subDirs.size == 1) {
+            val single = subDirs.first()
+            if (single.name.equals(unpackedDir.name, ignoreCase = true) || single.name.equals(partitionName, ignoreCase = true)) {
+                return single
+            }
+        }
+
+        return unpackedDir
+    }
+
     data class RepackoreSchema(
         val partitionName: String,
         val format: String,
@@ -55,12 +101,13 @@ object RepackoreEngine {
         originalFormat: String,
         partitionName: String = unpackedDir.name
     ): RepackoreSchema {
+        val payloadDir = resolvePayloadDirectory(unpackedDir, partitionName)
         var rawBytes = 0L
         var fileCount = 0
         val apksList = mutableListOf<File>()
         val symlinks = mutableListOf<Pair<String, String>>()
 
-        unpackedDir.walkTopDown()
+        payloadDir.walkTopDown()
             .onEnter { dir ->
                 try {
                     !Files.isSymbolicLink(dir.toPath())
@@ -70,9 +117,10 @@ object RepackoreEngine {
             }
             .forEach { file ->
                 try {
+                    if (file.name in EXCLUDED_METADATA_FILES) return@forEach
                     if (Files.isSymbolicLink(file.toPath())) {
                         val target = Files.readSymbolicLink(file.toPath()).toString()
-                        val rel = file.relativeTo(unpackedDir).path
+                        val rel = file.relativeTo(payloadDir).path
                         symlinks.add(Pair(rel, target))
                     } else if (file.isFile) {
                         fileCount++
@@ -89,20 +137,24 @@ object RepackoreEngine {
         val targetBytes = ((rawBytes + marginBytes + 4095L) / 4096L) * 4096L
         val totalBlocks = targetBytes / 4096L
 
-        // Lecture symlinks.txt
-        val symlinksFile = File(unpackedDir, "symlinks.txt")
+        // Lecture symlinks.txt (dans payloadDir ou dans unpackedDir parent)
+        val symlinksFile = File(payloadDir, "symlinks.txt").takeIf { it.exists() } ?: File(unpackedDir, "symlinks.txt")
         if (symlinksFile.exists()) {
             symlinksFile.readLines().forEach { line ->
                 val parts = line.split("->")
                 if (parts.size == 2) {
-                    symlinks.add(Pair(parts[0].trim(), parts[1].trim()))
+                    val src = parts[0].trim().removePrefix("./")
+                    val dst = parts[1].trim()
+                    if (!symlinks.any { it.first == src }) {
+                        symlinks.add(Pair(src, dst))
+                    }
                 }
             }
         }
 
         // Lecture fs_config
         val fsConfig = mutableMapOf<String, String>()
-        val fsConfigFile = File(unpackedDir, "fs_config")
+        val fsConfigFile = File(payloadDir, "fs_config").takeIf { it.exists() } ?: File(unpackedDir, "fs_config")
         if (fsConfigFile.exists()) {
             fsConfigFile.readLines().forEach { line ->
                 val p = line.trim().split(" ")
@@ -114,7 +166,7 @@ object RepackoreEngine {
 
         // Lecture file_contexts
         val fileContexts = mutableListOf<String>()
-        val fcFile = File(unpackedDir, "file_contexts")
+        val fcFile = File(payloadDir, "file_contexts").takeIf { it.exists() } ?: File(unpackedDir, "file_contexts")
         if (fcFile.exists()) {
             fileContexts.addAll(fcFile.readLines())
         }
@@ -310,13 +362,14 @@ object RepackoreEngine {
         onProgress: (String, Float) -> Unit,
         onLog: (String) -> Unit
     ) {
+        val payloadDir = resolvePayloadDirectory(unpackedDir)
         val buffer = ByteArray(64 * 1024)
-        val files = unpackedDir.walkTopDown()
+        val files = payloadDir.walkTopDown()
             .onEnter { !Files.isSymbolicLink(it.toPath()) }
-            .filter { it.isFile && !Files.isSymbolicLink(it.toPath()) }
+            .filter { it.isFile && !Files.isSymbolicLink(it.toPath()) && it.name !in EXCLUDED_METADATA_FILES }
             .toList()
         val total = files.size
-        val baseUri = unpackedDir.toURI()
+        val baseUri = payloadDir.toURI()
 
         ZipOutputStream(FileOutputStream(outputFile)).use { zos ->
             for ((idx, file) in files.withIndex()) {
@@ -355,10 +408,15 @@ object RepackoreEngine {
         var success = false
         val isRooted = RootChecker.checkRoot().isRooted
         val targetSize = schema.targetSizeWithMargin
+        val payloadDir = resolvePayloadDirectory(unpackedDir, blueprint.partitionName)
+
+        if (payloadDir != unpackedDir) {
+            onLog("[REPACKORE:RACINE] Dossier source de partition identifié : ${payloadDir.name} (positionnement direct à la racine / de l'image).")
+        }
 
         // 1. Essai avec make_ext4fs si présent et supporte le dossier source
         try {
-            val makeCmd = "make_ext4fs -l $targetSize -b 4096 '${outputFile.absolutePath}' '${unpackedDir.absolutePath}'"
+            val makeCmd = "make_ext4fs -l $targetSize -b 4096 '${outputFile.absolutePath}' '${payloadDir.absolutePath}'"
             val exitCode = if (isRooted) {
                 RootDelegator.executePrivilegedCommand(makeCmd) { line -> onLog("[make_ext4fs] $line") }
             } else {
@@ -389,7 +447,7 @@ object RepackoreEngine {
                 }
 
                 if (fmtRes == 0) {
-                    onProgress("REPACKORE : Montage loop RW et reconstitution de ${schema.totalFiles} fichiers...", 0.50f)
+                    onProgress("REPACKORE : Montage loop RW et reconstitution de ${schema.totalFiles} fichiers à la racine...", 0.50f)
                     val shortLink = "/data/local/tmp/uka_repack.raw"
                     val mountDir = "/data/local/tmp/uka_repack_mnt"
 
@@ -428,11 +486,14 @@ object RepackoreEngine {
 
                         if [ ${'$'}MOUNT_OK -eq 1 ]; then
                             echo "HEPHAISTOS_REPACK_MOUNTED"
+                            # Copie intégrale de tous les fichiers déballés directement à la racine du point de montage
                             if which tar >/dev/null 2>&1; then
-                                (cd '${unpackedDir.absolutePath}' && tar -cf - .) | (cd $mountDir && tar -xf -)
+                                (cd '${payloadDir.absolutePath}' && tar -cf - .) | (cd $mountDir && tar -xf -)
                             else
-                                cp -a '${unpackedDir.absolutePath}/.' $mountDir/
+                                cp -a '${payloadDir.absolutePath}/.' $mountDir/
                             fi
+                            # Nettoyage des fichiers techniques résiduels pour garantir une partition 100% conforme à l'originale
+                            rm -f $mountDir/symlinks.txt $mountDir/fs_config $mountDir/file_contexts $mountDir/filesystem_tree.json $mountDir/repack_blueprint.json $mountDir/*.meta.json 2>/dev/null
                             sync
                             echo "HEPHAISTOS_REPACK_COPIED"
                             umount -f $mountDir 2>/dev/null || umount $mountDir 2>/dev/null
@@ -463,7 +524,7 @@ object RepackoreEngine {
 
                     if (copyFinished || (mountRes == 0 && outputFile.length() > 4096L)) {
                         success = true
-                        onLog("[REPACKORE:SUCCÈS] Image EXT4 reconstituée et peuplée avec l'intégralité des ${schema.totalFiles} fichiers !")
+                        onLog("[REPACKORE:SUCCÈS] Image EXT4 reconstituée et peuplée avec l'intégralité des ${schema.totalFiles} fichiers directement à la racine !")
                     }
                 }
             } catch (e: Exception) {
@@ -474,7 +535,7 @@ object RepackoreEngine {
         // 3. Si échec de la reconstitution loop ou environnement sans root : Assemblage autonome
         if (!success) {
             onLog("[REPACKORE:SYNTHÈSE] Assemblage direct du système de fichiers EXT4 autonome...")
-            assembleAutonomousExt4Image(unpackedDir, schema, blueprint, outputFile, onProgress, onLog)
+            assembleAutonomousExt4Image(payloadDir, schema, blueprint, outputFile, onProgress, onLog)
         }
     }
 
@@ -489,9 +550,14 @@ object RepackoreEngine {
     ) {
         var success = false
         val isRooted = RootChecker.checkRoot().isRooted
+        val payloadDir = resolvePayloadDirectory(unpackedDir, blueprint.partitionName)
+
+        if (payloadDir != unpackedDir) {
+            onLog("[REPACKORE:RACINE] Dossier source EROFS : ${payloadDir.name} (mise à plat racine)")
+        }
 
         try {
-            val mkCmd = "mkfs.erofs -z lz4hc '${outputFile.absolutePath}' '${unpackedDir.absolutePath}'"
+            val mkCmd = "mkfs.erofs -z lz4hc '${outputFile.absolutePath}' '${payloadDir.absolutePath}'"
             val exitCode = if (isRooted) {
                 RootDelegator.executePrivilegedCommand(mkCmd) { line -> onLog("[mkfs.erofs] $line") }
             } else {
@@ -506,7 +572,7 @@ object RepackoreEngine {
 
         if (!success) {
             onLog("[REPACKORE:SYNTHÈSE] Assemblage direct de l'image de partition EROFS...")
-            assembleAutonomousExt4Image(unpackedDir, schema, blueprint, outputFile, onProgress, onLog)
+            assembleAutonomousExt4Image(payloadDir, schema, blueprint, outputFile, onProgress, onLog)
         }
     }
 
@@ -558,8 +624,9 @@ object RepackoreEngine {
             // SÉCURITÉ : Ne jamais suivre les symlinks de répertoire qui pointent vers le système hôte
             val allFiles = mutableListOf<File>()
             val isolatedSymlinks = mutableListOf<Pair<String, String>>()
+            val payload = resolvePayloadDirectory(unpackedDir, blueprint.partitionName)
 
-            unpackedDir.walkTopDown()
+            payload.walkTopDown()
                 .onEnter { dir ->
                     try {
                         !Files.isSymbolicLink(dir.toPath())
@@ -569,9 +636,12 @@ object RepackoreEngine {
                 }
                 .forEach { file ->
                     try {
+                        if (file.name in EXCLUDED_METADATA_FILES || file.name.endsWith(".meta.json")) {
+                            return@forEach
+                        }
                         if (Files.isSymbolicLink(file.toPath())) {
                             val target = Files.readSymbolicLink(file.toPath()).toString()
-                            val rel = file.relativeTo(unpackedDir).path
+                            val rel = file.relativeTo(payload).path
                             isolatedSymlinks.add(Pair(rel, target))
                         } else if (file.isFile) {
                             allFiles.add(file)
